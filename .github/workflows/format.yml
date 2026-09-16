@@ -1,0 +1,17 @@
+name: Format
+on: [push, pull_request]
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - name: Check formatting
+        run: |
+          if [ "$(gofmt -l .)" != "" ]; then
+            echo "Some files are not formatted correctly. Run 'go fmt ./...' locally."
+            exit 1
+          fi
