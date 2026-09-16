@@ -51,6 +51,7 @@ type model struct {
 
 	branches    []string
 	branchIndex int
+	expanded    bool
 }
 
 type tickMsg time.Time
@@ -74,8 +75,8 @@ func initialModel() model {
 		items = append(items, commitItem{commit: c})
 	}
 
-	m := list.New(items, newCustomDelegate(), 0, 0)
-	m.Title = fmt.Sprintf("Git Log TUI  [ Tab: switch branch ]  Branch: %s", branches[0])
+	m := list.New(items, newCustomDelegate(false), 0, 0)
+	m.Title = fmt.Sprintf("Git Log TUI  [ Tab: branch | Space: expand ]  Branch: %s", branches[0])
 	m.SetShowStatusBar(true)
 
 	fList := list.New([]list.Item{}, newFileDelegate(), 0, 0)
@@ -102,7 +103,7 @@ func (m *model) updateCommits() {
 		items = append(items, commitItem{commit: c})
 	}
 	m.commitList.SetItems(items)
-	m.commitList.Title = fmt.Sprintf("Git Log TUI  [ Tab: switch branch ]  Branch: %s", branch)
+	m.commitList.Title = fmt.Sprintf("Git Log TUI  [ Tab: branch | Space: expand ]  Branch: %s", branch)
 	m.commitList.ResetSelected()
 }
 
@@ -162,6 +163,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else if msg.String() == "shift+tab" {
 				m.branchIndex = (m.branchIndex - 1 + len(m.branches)) % len(m.branches)
 				m.updateCommits()
+				return m, nil
+			} else if msg.String() == " " || msg.String() == "e" {
+				m.expanded = !m.expanded
+				m.commitList.SetDelegate(newCustomDelegate(m.expanded))
 				return m, nil
 			} else if msg.String() == "enter" || msg.String() == "right" || msg.String() == "l" {
 				if i, ok := m.commitList.SelectedItem().(commitItem); ok {

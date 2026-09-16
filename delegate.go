@@ -12,14 +12,18 @@ import (
 )
 
 type customDelegate struct {
-	Styles list.DefaultItemStyles
+	Styles   list.DefaultItemStyles
+	Expanded bool
 }
 
-func newCustomDelegate() customDelegate {
-	return customDelegate{Styles: list.NewDefaultItemStyles()}
+func newCustomDelegate(expanded bool) customDelegate {
+	return customDelegate{Styles: list.NewDefaultItemStyles(), Expanded: expanded}
 }
 
 func (d customDelegate) Height() int {
+	if d.Expanded {
+		return 14
+	}
 	return 6
 }
 
@@ -46,7 +50,12 @@ func (d customDelegate) Render(w io.Writer, m list.Model, index int, listItem li
 		bodyLines = strings.Split(wrappedBody, "\n")
 	}
 
-	for j := 0; j < 4; j++ {
+	maxLines := 4
+	if d.Expanded {
+		maxLines = 12
+	}
+
+	for j := 0; j < maxLines; j++ {
 		if j < len(bodyLines) {
 			desc += "\n" + bodyLines[j]
 		} else {
@@ -54,7 +63,7 @@ func (d customDelegate) Render(w io.Writer, m list.Model, index int, listItem li
 		}
 	}
 
-	if len(bodyLines) > 4 {
+	if len(bodyLines) > maxLines {
 		desc = desc[:len(desc)-3] + "..."
 	}
 
