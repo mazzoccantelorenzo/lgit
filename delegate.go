@@ -20,7 +20,7 @@ func newCustomDelegate() customDelegate {
 }
 
 func (d customDelegate) Height() int {
-	return 5
+	return 10
 }
 
 func (d customDelegate) Spacing() int {
@@ -46,7 +46,7 @@ func (d customDelegate) Render(w io.Writer, m list.Model, index int, listItem li
 		bodyLines = strings.Split(wrappedBody, "\n")
 	}
 
-	for j := 0; j < 3; j++ {
+	for j := 0; j < 8; j++ {
 		if j < len(bodyLines) {
 			desc += "\n" + bodyLines[j]
 		} else {
@@ -54,7 +54,7 @@ func (d customDelegate) Render(w io.Writer, m list.Model, index int, listItem li
 		}
 	}
 
-	if len(bodyLines) > 3 {
+	if len(bodyLines) > 8 {
 		desc = desc[:len(desc)-3] + "..."
 	}
 
