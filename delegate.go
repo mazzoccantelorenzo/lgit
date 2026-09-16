@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/muesli/reflow/wordwrap"
 )
 
 type customDelegate struct {
@@ -38,7 +39,8 @@ func (d customDelegate) Render(w io.Writer, m list.Model, index int, listItem li
 	title := i.Title()
 	desc := fmt.Sprintf("%s • %s", i.commit.Author, i.commit.Date)
 	if i.commit.Body != "" {
-		desc += "\n\n" + strings.TrimSpace(i.commit.Body)
+		wrappedBody := wordwrap.String(strings.TrimSpace(i.commit.Body), m.Width()-6)
+		desc += "\n\n" + wrappedBody
 	}
 
 	if index == m.Index() {
