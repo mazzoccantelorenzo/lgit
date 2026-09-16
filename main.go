@@ -78,7 +78,7 @@ func initialModel() model {
 	m.Title = fmt.Sprintf("Git Log TUI  [ Tab: switch branch ]  Branch: %s", branches[0])
 	m.SetShowStatusBar(true)
 
-	fList := list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0)
+	fList := list.New([]list.Item{}, newFileDelegate(), 0, 0)
 	fList.Title = "Files Changed"
 	fList.SetShowStatusBar(false)
 
@@ -274,11 +274,19 @@ func colorizeDiff(diff string) string {
 }
 
 func (m model) View() string {
+	if m.width < 50 || m.height < 15 {
+		return docStyle.Render("Terminal too small.\nPlease resize the window.")
+	}
+
 	if m.state == 0 {
 		return docStyle.Render(m.commitList.View())
 	}
 
-	left := sidebarStyle.Width(m.width / 3).Height(m.height).Render(m.fileList.View())
+	fileListWidth := m.width / 3
+	if fileListWidth < 20 {
+		fileListWidth = 20
+	}
+	left := sidebarStyle.Width(fileListWidth).Height(m.height).Render(m.fileList.View())
 
 	var header string
 	if m.state == 1 {
@@ -288,7 +296,11 @@ func (m model) View() string {
 	}
 
 	diffContent := lipgloss.JoinVertical(lipgloss.Left, header, m.diffView.View())
-	right := diffStyle.Width(m.width - (m.width / 3) - 2).Height(m.height).Render(diffContent)
+	diffWidth := m.width - fileListWidth - 2
+	if diffWidth < 10 {
+		diffWidth = 10
+	}
+	right := diffStyle.Width(diffWidth).Height(m.height).Render(diffContent)
 
 	return docStyle.Render(lipgloss.JoinHorizontal(lipgloss.Top, left, right))
 }
