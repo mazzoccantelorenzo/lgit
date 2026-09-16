@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -52,6 +53,14 @@ type model struct {
 	branchIndex int
 }
 
+type tickMsg time.Time
+
+func tickCmd() tea.Cmd {
+	return tea.Tick(time.Second*2, func(t time.Time) tea.Msg {
+		return tickMsg(t)
+	})
+}
+
 func initialModel() model {
 	branches, _ := core.FetchBranches()
 	if len(branches) == 0 {
@@ -98,7 +107,7 @@ func (m *model) updateCommits() {
 }
 
 func (m model) Init() tea.Cmd {
-	return nil
+	return tickCmd()
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -106,6 +115,39 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
+	case tickMsg:
+		// Re-fetch branches and commits in background to check for updates
+		branches, _ := core.FetchBranches()
+		if len(branches) > 0 {
+			m.branches = branches
+			if m.branchIndex >= len(m.branches) {
+				m.branchIndex = 0
+			}
+			branch := m.branches[m.branchIndex]
+			commits, _ := core.FetchCommits(branch)
+
+			if len(commits) > 0 {
+				needsUpdate := false
+				if len(commits) != len(m.commitList.Items()) {
+					needsUpdate = true
+				} else if len(m.commitList.Items()) > 0 {
+					topExisting := m.commitList.Items()[0].(commitItem).commit.ID
+					if commits[0].ID != topExisting {
+						needsUpdate = true
+					}
+				}
+
+				if needsUpdate {
+					var items []list.Item
+					for _, c := range commits {
+						items = append(items, commitItem{commit: c})
+					}
+					m.commitList.SetItems(items)
+				}
+			}
+		}
+		return m, tickCmd()
+
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" || msg.String() == "q" {
 			return m, tea.Quit
