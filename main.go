@@ -66,7 +66,7 @@ func initialModel() model {
 	}
 
 	m := list.New(items, newCustomDelegate(), 0, 0)
-	m.Title = fmt.Sprintf("Git Log TUI  [ ← %s → ]", branches[0])
+	m.Title = fmt.Sprintf("Git Log TUI  [ Tab: switch branch ]  Branch: %s", branches[0])
 	m.SetShowStatusBar(true)
 
 	fList := list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0)
@@ -93,7 +93,7 @@ func (m *model) updateCommits() {
 		items = append(items, commitItem{commit: c})
 	}
 	m.commitList.SetItems(items)
-	m.commitList.Title = fmt.Sprintf("Git Log TUI  [ ← %s → ]", branch)
+	m.commitList.Title = fmt.Sprintf("Git Log TUI  [ Tab: switch branch ]  Branch: %s", branch)
 	m.commitList.ResetSelected()
 }
 
@@ -112,15 +112,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		if m.state == 0 {
-			if msg.String() == "right" {
+			if msg.String() == "tab" {
 				m.branchIndex = (m.branchIndex + 1) % len(m.branches)
 				m.updateCommits()
 				return m, nil
-			} else if msg.String() == "left" {
+			} else if msg.String() == "shift+tab" {
 				m.branchIndex = (m.branchIndex - 1 + len(m.branches)) % len(m.branches)
 				m.updateCommits()
 				return m, nil
-			} else if msg.String() == "enter" {
+			} else if msg.String() == "enter" || msg.String() == "right" || msg.String() == "l" {
 				if i, ok := m.commitList.SelectedItem().(commitItem); ok {
 					m.selectedCommit = i.commit
 					files, _ := core.FetchCommitFiles(m.selectedCommit.ID)
