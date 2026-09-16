@@ -18,7 +18,6 @@ var (
 	sidebarStyle = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("#30363d")).Padding(1, 2)
 	diffStyle    = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("#30363d")).Padding(1, 2)
 	headerStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#c9d1d9")).Bold(true).PaddingBottom(1)
-	bodyStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#8b949e")).PaddingBottom(1).Italic(true)
 )
 
 type commitItem struct {
@@ -44,14 +43,22 @@ type model struct {
 	fileList   list.Model
 	diffView   viewport.Model
 
-	state          int
+	state          int // 0 = Commits, 1 = Commit Files/Diff, 2 = Branch Files/Diff
 	width          int
 	height         int
 	selectedCommit core.Commit
+
+	branches    []string
+	branchIndex int
 }
 
 func initialModel() model {
-	commits, _ := core.FetchCommits()
+	branches, _ := core.FetchBranches()
+	if len(branches) == 0 {
+		branches = []string{"master"}
+	}
+
+	commits, _ := core.FetchCommits(branches[0])
 
 	var items []list.Item
 	for _, c := range commits {
@@ -59,8 +66,8 @@ func initialModel() model {
 	}
 
 	m := list.New(items, newCustomDelegate(), 0, 0)
-	m.Title = "Git Log TUI"
-	m.SetShowStatusBar(false)
+	m.Title = fmt.Sprintf("Git Log TUI  [ ← %s → ]", branches[0])
+	m.SetShowStatusBar(true)
 
 	fList := list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0)
 	fList.Title = "Files Changed"
@@ -69,11 +76,25 @@ func initialModel() model {
 	vp := viewport.New(0, 0)
 
 	return model{
-		commitList: m,
-		fileList:   fList,
-		diffView:   vp,
-		state:      0,
+		commitList:  m,
+		fileList:    fList,
+		diffView:    vp,
+		state:       0,
+		branches:    branches,
+		branchIndex: 0,
 	}
+}
+
+func (m *model) updateCommits() {
+	branch := m.branches[m.branchIndex]
+	commits, _ := core.FetchCommits(branch)
+	var items []list.Item
+	for _, c := range commits {
+		items = append(items, commitItem{commit: c})
+	}
+	m.commitList.SetItems(items)
+	m.commitList.Title = fmt.Sprintf("Git Log TUI  [ ← %s → ]", branch)
+	m.commitList.ResetSelected()
 }
 
 func (m model) Init() tea.Cmd {
@@ -91,7 +112,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		if m.state == 0 {
-			if msg.String() == "right" || msg.String() == "enter" {
+			if msg.String() == "right" {
+				m.branchIndex = (m.branchIndex + 1) % len(m.branches)
+				m.updateCommits()
+				return m, nil
+			} else if msg.String() == "left" {
+				m.branchIndex = (m.branchIndex - 1 + len(m.branches)) % len(m.branches)
+				m.updateCommits()
+				return m, nil
+			} else if msg.String() == "enter" {
 				if i, ok := m.commitList.SelectedItem().(commitItem); ok {
 					m.selectedCommit = i.commit
 					files, _ := core.FetchCommitFiles(m.selectedCommit.ID)
@@ -101,6 +130,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						fItems = append(fItems, fileItem{file: f})
 					}
 					m.fileList.SetItems(fItems)
+					m.fileList.Title = "Commit Files"
 
 					if len(files) > 0 {
 						diff, _ := core.FetchFileDiff(m.selectedCommit.ID, files[0].Path)
@@ -112,12 +142,32 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.state = 1
 					return m, nil
 				}
+			} else if msg.String() == "b" {
+				branch := m.branches[m.branchIndex]
+				files, _ := core.FetchBranchFiles(branch)
+
+				var fItems []list.Item
+				for _, f := range files {
+					fItems = append(fItems, fileItem{file: f})
+				}
+				m.fileList.SetItems(fItems)
+				m.fileList.Title = "Branch Files (" + branch + ")"
+
+				if len(files) > 0 {
+					diff, _ := core.FetchBranchFileDiff(branch, files[0].Path)
+					m.diffView.SetContent(colorizeDiff(diff))
+				} else {
+					m.diffView.SetContent("No diff available (branch is even with master).")
+				}
+				m.state = 2
+				return m, nil
 			}
+
 			m.commitList, cmd = m.commitList.Update(msg)
 			cmds = append(cmds, cmd)
 
-		} else if m.state == 1 {
-			if msg.String() == "left" || msg.String() == "esc" {
+		} else if m.state == 1 || m.state == 2 {
+			if msg.String() == "esc" || (msg.String() == "left" && m.state == 1) { // let left/right in file view ? Just ESC is safer. Or left to go back.
 				m.state = 0
 				return m, nil
 			}
@@ -128,7 +178,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			if m.fileList.Index() != oldIndex {
 				if f, ok := m.fileList.SelectedItem().(fileItem); ok {
-					diff, _ := core.FetchFileDiff(m.selectedCommit.ID, f.file.Path)
+					var diff string
+					if m.state == 1 {
+						diff, _ = core.FetchFileDiff(m.selectedCommit.ID, f.file.Path)
+					} else {
+						diff, _ = core.FetchBranchFileDiff(m.branches[m.branchIndex], f.file.Path)
+					}
 					m.diffView.SetContent(colorizeDiff(diff))
 					m.diffView.GotoTop()
 				}
@@ -147,7 +202,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.fileList.SetSize(m.width/3, m.height)
 
 		m.diffView.Width = m.width - (m.width / 3) - 6
-		m.diffView.Height = m.height - 4 - 3 // leave space for header and body
+		m.diffView.Height = m.height - 4 - 2 // leave space for header
 	}
 
 	return m, tea.Batch(cmds...)
@@ -182,13 +237,14 @@ func (m model) View() string {
 
 	left := sidebarStyle.Width(m.width / 3).Height(m.height).Render(m.fileList.View())
 
-	header := headerStyle.Render(m.selectedCommit.Message)
-	body := ""
-	if m.selectedCommit.Body != "" {
-		body = bodyStyle.Render(m.selectedCommit.Body)
+	var header string
+	if m.state == 1 {
+		header = headerStyle.Render(m.selectedCommit.Message)
+	} else {
+		header = headerStyle.Render("Changes in branch: " + m.branches[m.branchIndex])
 	}
 
-	diffContent := lipgloss.JoinVertical(lipgloss.Left, header, body, m.diffView.View())
+	diffContent := lipgloss.JoinVertical(lipgloss.Left, header, m.diffView.View())
 	right := diffStyle.Width(m.width - (m.width / 3) - 2).Height(m.height).Render(diffContent)
 
 	return docStyle.Render(lipgloss.JoinHorizontal(lipgloss.Top, left, right))
