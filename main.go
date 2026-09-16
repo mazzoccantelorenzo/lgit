@@ -131,8 +131,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if len(commits) != len(m.commitList.Items()) {
 					needsUpdate = true
 				} else if len(m.commitList.Items()) > 0 {
-					topExisting := m.commitList.Items()[0].(commitItem).commit.ID
-					if commits[0].ID != topExisting {
+					topExistingID := m.commitList.Items()[0].(commitItem).commit.ID
+					topExistingDate := m.commitList.Items()[0].(commitItem).commit.Date
+					if commits[0].ID != topExistingID || commits[0].Date != topExistingDate {
 						needsUpdate = true
 					}
 				}
