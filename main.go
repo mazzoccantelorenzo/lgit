@@ -268,8 +268,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.commitList.SetSize(m.width, m.height)
 
 		innerSideHeight := m.height - sideH
-		if innerSideHeight < 5 {
-			innerSideHeight = 5
+		if innerSideHeight < 1 {
+			innerSideHeight = 1
 		}
 
 		m.fileList.SetSize(m.width/3, innerSideHeight)
@@ -277,8 +277,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.diffView.Width = m.width - (m.width / 3) - 6
 
 		diffHeight := innerSideHeight - 2
-		if diffHeight < 5 {
-			diffHeight = 5
+		if diffHeight < 1 {
+			diffHeight = 1
 		}
 		m.diffView.Height = diffHeight
 	}
@@ -309,17 +309,15 @@ func colorizeDiff(diff string) string {
 }
 
 func (m model) View() string {
-	if m.width < 50 || m.height < 15 {
-		return docStyle.Render("Terminal too small.\nPlease resize the window.")
-	}
+	// Removed strict terminal bounds to allow any zoom level
 
 	if m.state == 0 {
 		return docStyle.Render(m.commitList.View())
 	}
 
 	fileListWidth := m.width / 3
-	if fileListWidth < 20 {
-		fileListWidth = 20
+	if fileListWidth < 5 {
+		fileListWidth = 5
 	}
 
 	var header string
@@ -330,8 +328,8 @@ func (m model) View() string {
 	}
 
 	diffWidth := m.width - fileListWidth - 2
-	if diffWidth < 10 {
-		diffWidth = 10
+	if diffWidth < 5 {
+		diffWidth = 5
 	}
 
 	footerText := " [←] Sidebar  [→] Scroll Diff "
