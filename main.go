@@ -239,7 +239,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		h, v := docStyle.GetFrameSize()
 		m.width = msg.Width - h
-		m.height = msg.Height - v
+		m.height = msg.Height - v - 2
 
 		m.commitList.SetSize(m.width, m.height)
 		m.fileList.SetSize(m.width/3, m.height)

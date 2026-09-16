@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/reflow/wordwrap"
 )
 
@@ -38,18 +39,37 @@ func (d customDelegate) Render(w io.Writer, m list.Model, index int, listItem li
 
 	title := i.Title()
 	desc := fmt.Sprintf("%s • %s", i.commit.Author, i.commit.Date)
+
+	bodyLines := []string{}
 	if i.commit.Body != "" {
 		wrappedBody := wordwrap.String(strings.TrimSpace(i.commit.Body), m.Width()-6)
-		desc += "\n\n" + wrappedBody
+		bodyLines = strings.Split(wrappedBody, "\n")
+	}
+
+	for j := 0; j < 3; j++ {
+		if j < len(bodyLines) {
+			desc += "\n" + bodyLines[j]
+		} else {
+			desc += "\n"
+		}
+	}
+
+	if len(bodyLines) > 3 {
+		desc = desc[:len(desc)-3] + "..."
 	}
 
 	if index == m.Index() {
 		title = d.Styles.SelectedTitle.Render("> " + title)
-		desc = d.Styles.SelectedDesc.Render(desc)
+		desc = d.Styles.SelectedDesc.Render(strings.ReplaceAll(desc, "\n", "\n  "))
+		desc = "  " + desc
 	} else {
 		title = d.Styles.NormalTitle.Render("  " + title)
-		desc = d.Styles.NormalDesc.Render(desc)
+		desc = d.Styles.NormalDesc.Render(strings.ReplaceAll(desc, "\n", "\n  "))
+		desc = "  " + desc
 	}
 
-	fmt.Fprintf(w, "%s\n%s", title, desc)
+	block := fmt.Sprintf("%s\n%s", title, desc)
+	block = lipgloss.NewStyle().MaxWidth(m.Width() - 2).Render(block)
+
+	fmt.Fprint(w, block)
 }
