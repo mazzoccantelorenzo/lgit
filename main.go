@@ -216,30 +216,45 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, cmd)
 
 		} else if m.state == 1 || m.state == 2 {
-			if msg.String() == "esc" || msg.String() == "left" || msg.String() == "h" {
+			if msg.String() == "esc" {
+				m.state = 0
+				m.diffFocus = false
+				return m, nil
+			}
+			if msg.String() == "left" || msg.String() == "h" {
+				if m.diffFocus {
+					m.diffFocus = false
+					return m, nil
+				}
 				m.state = 0
 				return m, nil
 			}
-
-			oldIndex := m.fileList.Index()
-			m.fileList, cmd = m.fileList.Update(msg)
-			cmds = append(cmds, cmd)
-
-			if m.fileList.Index() != oldIndex {
-				if f, ok := m.fileList.SelectedItem().(fileItem); ok {
-					var diff string
-					if m.state == 1 {
-						diff, _ = core.FetchFileDiff(m.selectedCommit.ID, f.file.Path)
-					} else {
-						diff, _ = core.FetchBranchFileDiff(m.branches[m.branchIndex], f.file.Path)
-					}
-					m.diffView.SetContent(colorizeDiff(diff))
-					m.diffView.GotoTop()
-				}
+			if msg.String() == "right" || msg.String() == "l" {
+				m.diffFocus = true
+				return m, nil
 			}
 
-			m.diffView, cmd = m.diffView.Update(msg)
-			cmds = append(cmds, cmd)
+			if !m.diffFocus {
+				oldIndex := m.fileList.Index()
+				m.fileList, cmd = m.fileList.Update(msg)
+				cmds = append(cmds, cmd)
+
+				if m.fileList.Index() != oldIndex {
+					if f, ok := m.fileList.SelectedItem().(fileItem); ok {
+						var diff string
+						if m.state == 1 {
+							diff, _ = core.FetchFileDiff(m.selectedCommit.ID, f.file.Path)
+						} else {
+							diff, _ = core.FetchBranchFileDiff(m.branches[m.branchIndex], f.file.Path)
+						}
+						m.diffView.SetContent(colorizeDiff(diff))
+						m.diffView.GotoTop()
+					}
+				}
+			} else {
+				m.diffView, cmd = m.diffView.Update(msg)
+				cmds = append(cmds, cmd)
+			}
 		}
 
 	case tea.WindowSizeMsg:
@@ -292,7 +307,6 @@ func (m model) View() string {
 	if fileListWidth < 20 {
 		fileListWidth = 20
 	}
-	left := ""
 
 	var header string
 	if m.state == 1 {
@@ -301,12 +315,41 @@ func (m model) View() string {
 		header = headerStyle.Render("Changes in branch: " + m.branches[m.branchIndex])
 	}
 
-	diffContent := lipgloss.JoinVertical(lipgloss.Left, header, m.diffView.View())
 	diffWidth := m.width - fileListWidth - 2
 	if diffWidth < 10 {
 		diffWidth = 10
 	}
-	right := diffStyle.Width(diffWidth).Height(m.height).Render(diffContent)
+
+	footerText := " [←] Sidebar  [→] Scroll Diff "
+	if m.diffFocus {
+		footerText = " [↑/↓] Scroll  [←] Back to Sidebar "
+	}
+	percent := int(m.diffView.ScrollPercent() * 100)
+	footerRight := fmt.Sprintf(" %3d%% ", percent)
+
+	footerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#8b949e")).Background(lipgloss.Color("#161b22"))
+	if m.diffFocus {
+		footerStyle = footerStyle.Foreground(lipgloss.Color("#c9d1d9")).Background(lipgloss.Color("#1f6feb"))
+	}
+
+	footer := lipgloss.JoinHorizontal(lipgloss.Top,
+		footerStyle.Render(footerText),
+		lipgloss.NewStyle().Width(diffWidth-lipgloss.Width(footerText)-lipgloss.Width(footerRight)).Render(""),
+		footerStyle.Render(footerRight),
+	)
+
+	diffContent := lipgloss.JoinVertical(lipgloss.Left, header, m.diffView.View(), footer)
+
+	rStyle := diffStyle.Copy()
+	lStyle := sidebarStyle.Copy()
+	if m.diffFocus {
+		rStyle = rStyle.BorderForeground(lipgloss.Color("#58a6ff"))
+	} else {
+		lStyle = lStyle.BorderForeground(lipgloss.Color("#58a6ff"))
+	}
+
+	right := rStyle.Width(diffWidth).Height(m.height).Render(diffContent)
+	left := lStyle.Width(fileListWidth).Height(m.height).Render(m.fileList.View())
 
 	return docStyle.Render(lipgloss.JoinHorizontal(lipgloss.Top, left, right))
 }
