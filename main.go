@@ -15,7 +15,7 @@ import (
 
 // UI Constants
 var (
-	docStyle     = lipgloss.NewStyle().Margin(2, 2)
+	docStyle     = lipgloss.NewStyle().Margin(0, 1)
 	sidebarStyle = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("#30363d")).Padding(1, 2)
 	diffStyle    = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("#30363d")).Padding(1, 2)
 	headerStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#c9d1d9")).Bold(true).PaddingBottom(1)
@@ -258,15 +258,29 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.WindowSizeMsg:
-		h, v := docStyle.GetFrameSize()
-		m.width = msg.Width - h
-		m.height = msg.Height - v - 2
+		docW, docH := docStyle.GetFrameSize()
+		sideW, sideH := sidebarStyle.GetFrameSize()
+		_ = sideW
+
+		m.width = msg.Width - docW
+		m.height = msg.Height - docH - 1 // 1 line safety
 
 		m.commitList.SetSize(m.width, m.height)
-		m.fileList.SetSize(m.width/3, m.height)
+
+		innerSideHeight := m.height - sideH
+		if innerSideHeight < 5 {
+			innerSideHeight = 5
+		}
+
+		m.fileList.SetSize(m.width/3, innerSideHeight)
 
 		m.diffView.Width = m.width - (m.width / 3) - 6
-		m.diffView.Height = m.height - 4 - 2 // leave space for header
+
+		diffHeight := innerSideHeight - 2
+		if diffHeight < 5 {
+			diffHeight = 5
+		}
+		m.diffView.Height = diffHeight
 	}
 
 	return m, tea.Batch(cmds...)
@@ -348,8 +362,14 @@ func (m model) View() string {
 		lStyle = lStyle.BorderForeground(lipgloss.Color("#58a6ff"))
 	}
 
-	right := rStyle.Width(diffWidth).Height(m.height).Render(diffContent)
-	left := lStyle.Width(fileListWidth).Height(m.height).Render(m.fileList.View())
+	_, sideH := sidebarStyle.GetFrameSize()
+	innerSideHeight := m.height - sideH
+	if innerSideHeight < 5 {
+		innerSideHeight = 5
+	}
+
+	right := rStyle.Width(diffWidth).Height(innerSideHeight).Render(diffContent)
+	left := lStyle.Width(fileListWidth).Height(innerSideHeight).Render(m.fileList.View())
 
 	return docStyle.Render(lipgloss.JoinHorizontal(lipgloss.Top, left, right))
 }
