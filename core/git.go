@@ -10,6 +10,7 @@ import (
 type Commit struct {
 	ID      string
 	Message string
+	Body    string
 	Author  string
 	Date    string
 }
@@ -22,7 +23,7 @@ type FileChange struct {
 
 // FetchCommits is the function that handles fetching recent commits from the repository.
 func FetchCommits() ([]Commit, error) {
-	cmd := exec.Command("git", "log", "-n", "50", "--pretty=format:%h|%s|%an|%cr")
+	cmd := exec.Command("git", "log", "-n", "50", "--pretty=format:%h|%s|%an|%cr|%b%n---END_COMMIT---")
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	err := cmd.Run()
@@ -31,18 +32,20 @@ func FetchCommits() ([]Commit, error) {
 	}
 
 	var commits []Commit
-	lines := strings.Split(out.String(), "\n")
-	for _, l := range lines {
-		if l == "" {
+	blocks := strings.Split(out.String(), "---END_COMMIT---")
+	for _, block := range blocks {
+		block = strings.TrimSpace(block)
+		if block == "" {
 			continue
 		}
-		parts := strings.SplitN(l, "|", 4)
-		if len(parts) == 4 {
+		parts := strings.SplitN(block, "|", 5)
+		if len(parts) == 5 {
 			commits = append(commits, Commit{
-				ID:      parts[0],
-				Message: parts[1],
-				Author:  parts[2],
-				Date:    parts[3],
+				ID:      strings.TrimSpace(parts[0]),
+				Message: strings.TrimSpace(parts[1]),
+				Author:  strings.TrimSpace(parts[2]),
+				Date:    strings.TrimSpace(parts[3]),
+				Body:    strings.TrimSpace(parts[4]),
 			})
 		}
 	}
@@ -83,7 +86,6 @@ func FetchFileDiff(commitID, filePath string) (string, error) {
 	cmd.Stdout = &out
 	err := cmd.Run()
 	if err != nil {
-		// Fallback to git diff if show fails (e.g., added files might behave differently)
 		fallback := exec.Command("git", "diff", commitID+"^", commitID, "--", filePath)
 		var fbOut bytes.Buffer
 		fallback.Stdout = &fbOut

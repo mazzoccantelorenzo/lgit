@@ -1,7 +1,7 @@
 .PHONY: build run test lint format hooks clean
 
 build:
-	go build -o bin/lorenzogit main.go
+	go build -o bin/lorenzogit .
 
 run: build
 	./bin/lorenzogit
