@@ -15,7 +15,7 @@ import (
 
 // UI Constants
 var (
-	docStyle     = lipgloss.NewStyle().Margin(1, 2)
+	docStyle     = lipgloss.NewStyle().Margin(2, 2)
 	sidebarStyle = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("#30363d")).Padding(1, 2)
 	diffStyle    = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("#30363d")).Padding(1, 2)
 	headerStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#c9d1d9")).Bold(true).PaddingBottom(1)
