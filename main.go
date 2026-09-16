@@ -210,7 +210,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, cmd)
 
 		} else if m.state == 1 || m.state == 2 {
-			if msg.String() == "esc" || (msg.String() == "left" && m.state == 1) { // let left/right in file view ? Just ESC is safer. Or left to go back.
+			if msg.String() == "esc" || msg.String() == "left" || msg.String() == "h" {
 				m.state = 0
 				return m, nil
 			}
