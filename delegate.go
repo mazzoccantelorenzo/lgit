@@ -19,7 +19,7 @@ func newCustomDelegate() customDelegate {
 }
 
 func (d customDelegate) Height() int {
-	return 1
+	return 5
 }
 
 func (d customDelegate) Spacing() int {

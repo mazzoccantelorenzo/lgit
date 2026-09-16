@@ -106,7 +106,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						diff, _ := core.FetchFileDiff(m.selectedCommit.ID, files[0].Path)
 						m.diffView.SetContent(colorizeDiff(diff))
 					} else {
-						m.diffView.SetContent("Nessun diff disponibile.")
+						m.diffView.SetContent("No diff available.")
 					}
 
 					m.state = 1
