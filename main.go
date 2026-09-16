@@ -52,6 +52,7 @@ type model struct {
 	branches    []string
 	branchIndex int
 	expanded    bool
+	diffFocus   bool
 }
 
 type tickMsg time.Time
@@ -291,7 +292,7 @@ func (m model) View() string {
 	if fileListWidth < 20 {
 		fileListWidth = 20
 	}
-	left := sidebarStyle.Width(fileListWidth).Height(m.height).Render(m.fileList.View())
+	left := ""
 
 	var header string
 	if m.state == 1 {
