@@ -1,10 +1,14 @@
-.PHONY: build run test lint format hooks clean
+.PHONY: build run test lint format hooks clean install
 
 build:
-	go build -o bin/lorenzogit .
+	go build -o bin/lgit .
+
+install: build
+	sudo mv bin/lgit /usr/local/bin/lgit
+	@echo "lgit installed successfully in /usr/local/bin/"
 
 run: build
-	./bin/lorenzogit
+	./bin/lgit
 
 test:
 	go test ./...
