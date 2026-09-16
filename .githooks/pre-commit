@@ -1,0 +1,26 @@
+#!/bin/bash
+# Pre-commit hook to run formatting, linting, and tests
+
+echo "Running go fmt..."
+go fmt ./...
+if [ $? -ne 0 ]; then
+    echo "go fmt failed"
+    exit 1
+fi
+
+echo "Running go vet..."
+go vet ./...
+if [ $? -ne 0 ]; then
+    echo "go vet failed"
+    exit 1
+fi
+
+echo "Running tests..."
+go test ./...
+if [ $? -ne 0 ]; then
+    echo "tests failed"
+    exit 1
+fi
+
+echo "All checks passed."
+exit 0
