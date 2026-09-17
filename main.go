@@ -105,9 +105,10 @@ func (m *model) updateCommits() {
 	for _, c := range commits {
 		items = append(items, commitItem{commit: c})
 	}
+	oldIdx := m.commitList.Index()
 	m.commitList.SetItems(items)
 	m.commitList.Title = fmt.Sprintf("Git Log TUI  [ Tab: branch | Space: expand ]  Branch: %s", branch)
-	m.commitList.ResetSelected()
+	m.commitList.Select(oldIdx)
 }
 
 func (m model) Init() tea.Cmd {
@@ -186,9 +187,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					cmd := exec.Command("git", "history", "reword", i.commit.ID)
 					nvimCmd := "nvim --headless -c 'set ft=gitcommit textwidth=72' -c 'normal! gg0gqG' -c 'wq'"
 					cmd.Env = append(os.Environ(), "GIT_EDITOR="+nvimCmd, "EDITOR="+nvimCmd, "VISUAL="+nvimCmd)
-					return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
+					return m, func() tea.Msg {
+						err := cmd.Run()
 						return rebaseFinishedMsg{err}
-					})
+					}
 				}
 			} else if msg.String() == "enter" || msg.String() == "right" || msg.String() == "l" {
 				if i, ok := m.commitList.SelectedItem().(commitItem); ok {
