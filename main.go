@@ -181,6 +181,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						return rebaseFinishedMsg{err}
 					})
 				}
+			} else if msg.String() == "f" {
+				if i, ok := m.commitList.SelectedItem().(commitItem); ok {
+					cmd := exec.Command("git", "history", "reword", i.commit.ID)
+					nvimCmd := "nvim --headless -c 'set ft=gitcommit textwidth=72' -c 'normal! gg0gqG' -c 'wq'"
+					cmd.Env = append(os.Environ(), "GIT_EDITOR="+nvimCmd, "EDITOR="+nvimCmd, "VISUAL="+nvimCmd)
+					return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
+						return rebaseFinishedMsg{err}
+					})
+				}
 			} else if msg.String() == "enter" || msg.String() == "right" || msg.String() == "l" {
 				if i, ok := m.commitList.SelectedItem().(commitItem); ok {
 					m.selectedCommit = i.commit
