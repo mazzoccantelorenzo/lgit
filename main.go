@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -55,6 +56,7 @@ type model struct {
 	diffFocus   bool
 }
 
+type rebaseFinishedMsg struct{ err error }
 type tickMsg time.Time
 
 func tickCmd() tea.Cmd {
@@ -117,6 +119,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
+	case rebaseFinishedMsg:
+		m.updateCommits()
+		return m, nil
 	case tickMsg:
 		// Re-fetch branches and commits in background to check for updates
 		branches, _ := core.FetchBranches()
@@ -165,10 +170,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.branchIndex = (m.branchIndex - 1 + len(m.branches)) % len(m.branches)
 				m.updateCommits()
 				return m, nil
-			} else if msg.String() == " " || msg.String() == "e" {
+			} else if msg.String() == " " {
 				m.expanded = !m.expanded
 				m.commitList.SetDelegate(newCustomDelegate(m.expanded))
 				return m, nil
+			} else if msg.String() == "e" {
+				if i, ok := m.commitList.SelectedItem().(commitItem); ok {
+					cmd := exec.Command("git", "history", "reword", i.commit.ID)
+					return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
+						return rebaseFinishedMsg{err}
+					})
+				}
 			} else if msg.String() == "enter" || msg.String() == "right" || msg.String() == "l" {
 				if i, ok := m.commitList.SelectedItem().(commitItem); ok {
 					m.selectedCommit = i.commit
