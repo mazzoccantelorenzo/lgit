@@ -17,7 +17,10 @@ type customDelegate struct {
 }
 
 func newCustomDelegate(expanded bool) customDelegate {
-	return customDelegate{Styles: list.NewDefaultItemStyles(), Expanded: expanded}
+	styles := list.NewDefaultItemStyles()
+	styles.NormalDesc = styles.NormalDesc.Foreground(lipgloss.Color("15"))
+	styles.SelectedDesc = styles.SelectedDesc.Foreground(lipgloss.Color("15"))
+	return customDelegate{Styles: styles, Expanded: expanded}
 }
 
 func (d customDelegate) Height() int {
@@ -45,7 +48,7 @@ func (d customDelegate) Render(w io.Writer, m list.Model, index int, listItem li
 	commitMsg := lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Render(i.commit.Message)
 
 	title := fmt.Sprintf("%s  %s", commitID, commitMsg)
-	descStr := fmt.Sprintf("%s • %s", i.commit.Author, i.commit.Date)
+	desc := fmt.Sprintf("%s • %s", i.commit.Author, i.commit.Date)
 
 	bodyLines := []string{}
 	if i.commit.Body != "" {
@@ -60,30 +63,27 @@ func (d customDelegate) Render(w io.Writer, m list.Model, index int, listItem li
 
 	for j := 0; j < maxLines; j++ {
 		if j < len(bodyLines) {
-			descStr += "\n" + bodyLines[j]
+			desc += "\n" + bodyLines[j]
 		} else {
-			descStr += "\n"
+			desc += "\n"
 		}
 	}
 
 	if len(bodyLines) > maxLines {
-		descStr = descStr[:len(descStr)-3] + "..."
+		desc = desc[:len(desc)-3] + "..."
 	}
-
-	// Optional: render description in white as well if requested "body bianco"
-	descWhite := lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Render(descStr)
 
 	if index == m.Index() {
 		title = d.Styles.SelectedTitle.Render("> ") + title
-		descWhite = d.Styles.SelectedDesc.Render(strings.ReplaceAll(descWhite, "\n", "\n  "))
-		descWhite = "  " + descWhite
+		desc = d.Styles.SelectedDesc.Render(strings.ReplaceAll(desc, "\n", "\n  "))
+		desc = "  " + desc
 	} else {
 		title = d.Styles.NormalTitle.Render("  ") + title
-		descWhite = d.Styles.NormalDesc.Render(strings.ReplaceAll(descWhite, "\n", "\n  "))
-		descWhite = "  " + descWhite
+		desc = d.Styles.NormalDesc.Render(strings.ReplaceAll(desc, "\n", "\n  "))
+		desc = "  " + desc
 	}
 
-	block := fmt.Sprintf("%s\n%s", title, descWhite)
+	block := fmt.Sprintf("%s\n%s", title, desc)
 	block = lipgloss.NewStyle().MaxWidth(m.Width() - 2).Render(block)
 
 	fmt.Fprint(w, block)
