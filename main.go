@@ -173,81 +173,88 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tickCmd()
 
 	case tea.KeyMsg:
-		if msg.String() == "ctrl+c" || msg.String() == "q" {
+		isFiltering := m.commitList.FilterState() == list.Filtering
+
+		if msg.String() == "ctrl+c" {
+			return m, tea.Quit
+		}
+		if !isFiltering && msg.String() == "q" {
 			return m, tea.Quit
 		}
 
 		if m.state == 0 {
-			if msg.String() == "tab" {
-				m.branchIndex = (m.branchIndex + 1) % len(m.branches)
-				m.updateCommits()
-				return m, nil
-			} else if msg.String() == "shift+tab" {
-				m.branchIndex = (m.branchIndex - 1 + len(m.branches)) % len(m.branches)
-				m.updateCommits()
-				return m, nil
-			} else if msg.String() == " " {
-				m.expanded = !m.expanded
-				m.commitList.SetDelegate(newCustomDelegate(m.expanded))
-				return m, nil
-			} else if msg.String() == "e" {
-				if i, ok := m.commitList.SelectedItem().(commitItem); ok {
-					cmd := exec.Command("git", "history", "reword", i.commit.ID)
-					return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
-						return rebaseFinishedMsg{err}
-					})
-				}
-			} else if msg.String() == "f" {
-				if i, ok := m.commitList.SelectedItem().(commitItem); ok {
-					cmd := exec.Command("git", "history", "reword", i.commit.ID)
-					nvimCmd := "nvim --headless -c 'set ft=gitcommit textwidth=72' -c 'g/^#/d' -c 'normal! gg0gqG' -c 'wq'"
-					cmd.Env = append(os.Environ(), "GIT_EDITOR="+nvimCmd, "EDITOR="+nvimCmd, "VISUAL="+nvimCmd)
-					return m, func() tea.Msg {
-						err := cmd.Run()
-						return rebaseFinishedMsg{err}
+			if !isFiltering {
+				if msg.String() == "tab" {
+					m.branchIndex = (m.branchIndex + 1) % len(m.branches)
+					m.updateCommits()
+					return m, nil
+				} else if msg.String() == "shift+tab" {
+					m.branchIndex = (m.branchIndex - 1 + len(m.branches)) % len(m.branches)
+					m.updateCommits()
+					return m, nil
+				} else if msg.String() == " " {
+					m.expanded = !m.expanded
+					m.commitList.SetDelegate(newCustomDelegate(m.expanded))
+					return m, nil
+				} else if msg.String() == "e" {
+					if i, ok := m.commitList.SelectedItem().(commitItem); ok {
+						cmd := exec.Command("git", "history", "reword", i.commit.ID)
+						return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
+							return rebaseFinishedMsg{err}
+						})
 					}
-				}
-			} else if msg.String() == "enter" || msg.String() == "right" || msg.String() == "l" {
-				if i, ok := m.commitList.SelectedItem().(commitItem); ok {
-					m.selectedCommit = i.commit
-					files, _ := core.FetchCommitFiles(m.selectedCommit.ID)
+				} else if msg.String() == "f" {
+					if i, ok := m.commitList.SelectedItem().(commitItem); ok {
+						cmd := exec.Command("git", "history", "reword", i.commit.ID)
+						nvimCmd := "nvim --headless -c 'set ft=gitcommit textwidth=72' -c 'g/^#/d' -c 'normal! gg0gqG' -c 'wq'"
+						cmd.Env = append(os.Environ(), "GIT_EDITOR="+nvimCmd, "EDITOR="+nvimCmd, "VISUAL="+nvimCmd)
+						return m, func() tea.Msg {
+							err := cmd.Run()
+							return rebaseFinishedMsg{err}
+						}
+					}
+				} else if msg.String() == "enter" || msg.String() == "right" || msg.String() == "l" {
+					if i, ok := m.commitList.SelectedItem().(commitItem); ok {
+						m.selectedCommit = i.commit
+						files, _ := core.FetchCommitFiles(m.selectedCommit.ID)
+
+						var fItems []list.Item
+						for _, f := range files {
+							fItems = append(fItems, fileItem{file: f})
+						}
+						m.fileList.SetItems(fItems)
+						m.fileList.Title = "Commit Files"
+
+						if len(files) > 0 {
+							diff, _ := core.FetchFileDiff(m.selectedCommit.ID, files[0].Path)
+							m.diffView.SetContent(colorizeDiff(diff))
+						} else {
+							m.diffView.SetContent("No diff available.")
+						}
+
+						m.state = 1
+						return m, nil
+					}
+				} else if msg.String() == "b" {
+					branch := m.branches[m.branchIndex]
+					files, _ := core.FetchBranchFiles(branch)
 
 					var fItems []list.Item
 					for _, f := range files {
 						fItems = append(fItems, fileItem{file: f})
 					}
 					m.fileList.SetItems(fItems)
-					m.fileList.Title = "Commit Files"
+					m.fileList.Title = "Branch Files (" + branch + ")"
 
 					if len(files) > 0 {
-						diff, _ := core.FetchFileDiff(m.selectedCommit.ID, files[0].Path)
+						diff, _ := core.FetchBranchFileDiff(branch, files[0].Path)
 						m.diffView.SetContent(colorizeDiff(diff))
 					} else {
-						m.diffView.SetContent("No diff available.")
+						m.diffView.SetContent("No diff available (branch is even with master).")
 					}
-
-					m.state = 1
+					m.state = 2
 					return m, nil
 				}
-			} else if msg.String() == "b" {
-				branch := m.branches[m.branchIndex]
-				files, _ := core.FetchBranchFiles(branch)
-
-				var fItems []list.Item
-				for _, f := range files {
-					fItems = append(fItems, fileItem{file: f})
-				}
-				m.fileList.SetItems(fItems)
-				m.fileList.Title = "Branch Files (" + branch + ")"
-
-				if len(files) > 0 {
-					diff, _ := core.FetchBranchFileDiff(branch, files[0].Path)
-					m.diffView.SetContent(colorizeDiff(diff))
-				} else {
-					m.diffView.SetContent("No diff available (branch is even with master).")
-				}
-				m.state = 2
-				return m, nil
 			}
 
 			m.commitList, cmd = m.commitList.Update(msg)
