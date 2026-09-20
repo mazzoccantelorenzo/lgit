@@ -38,7 +38,7 @@ func FetchBranches() ([]string, error) {
 }
 
 func FetchCommits(branch string) ([]Commit, error) {
-	cmd := exec.Command("git", "log", branch, "-n", "50", "--pretty=format:%h|%s|%an|%cr|%b%n---END_COMMIT---")
+	cmd := exec.Command("git", "log", branch, "-n", "1000", "--pretty=format:%h|%s|%an|%cr|%b%n---END_COMMIT---")
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	err := cmd.Run()
@@ -149,4 +149,15 @@ func FetchFileDiff(commitID, filePath string) (string, error) {
 		return fbOut.String(), nil
 	}
 	return out.String(), nil
+}
+
+func FetchCurrentBranch() string {
+	cmd := exec.Command("git", "branch", "--show-current")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	err := cmd.Run()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out.String())
 }

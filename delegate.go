@@ -41,8 +41,11 @@ func (d customDelegate) Render(w io.Writer, m list.Model, index int, listItem li
 		return
 	}
 
-	title := i.Title()
-	desc := fmt.Sprintf("%s • %s", i.commit.Author, i.commit.Date)
+	commitID := lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Render(i.commit.ID)
+	commitMsg := lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Render(i.commit.Message)
+
+	title := fmt.Sprintf("%s  %s", commitID, commitMsg)
+	descStr := fmt.Sprintf("%s • %s", i.commit.Author, i.commit.Date)
 
 	bodyLines := []string{}
 	if i.commit.Body != "" {
@@ -57,27 +60,30 @@ func (d customDelegate) Render(w io.Writer, m list.Model, index int, listItem li
 
 	for j := 0; j < maxLines; j++ {
 		if j < len(bodyLines) {
-			desc += "\n" + bodyLines[j]
+			descStr += "\n" + bodyLines[j]
 		} else {
-			desc += "\n"
+			descStr += "\n"
 		}
 	}
 
 	if len(bodyLines) > maxLines {
-		desc = desc[:len(desc)-3] + "..."
+		descStr = descStr[:len(descStr)-3] + "..."
 	}
+
+	// Optional: render description in white as well if requested "body bianco"
+	descWhite := lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Render(descStr)
 
 	if index == m.Index() {
-		title = d.Styles.SelectedTitle.Render("> " + title)
-		desc = d.Styles.SelectedDesc.Render(strings.ReplaceAll(desc, "\n", "\n  "))
-		desc = "  " + desc
+		title = d.Styles.SelectedTitle.Render("> ") + title
+		descWhite = d.Styles.SelectedDesc.Render(strings.ReplaceAll(descWhite, "\n", "\n  "))
+		descWhite = "  " + descWhite
 	} else {
-		title = d.Styles.NormalTitle.Render("  " + title)
-		desc = d.Styles.NormalDesc.Render(strings.ReplaceAll(desc, "\n", "\n  "))
-		desc = "  " + desc
+		title = d.Styles.NormalTitle.Render("  ") + title
+		descWhite = d.Styles.NormalDesc.Render(strings.ReplaceAll(descWhite, "\n", "\n  "))
+		descWhite = "  " + descWhite
 	}
 
-	block := fmt.Sprintf("%s\n%s", title, desc)
+	block := fmt.Sprintf("%s\n%s", title, descWhite)
 	block = lipgloss.NewStyle().MaxWidth(m.Width() - 2).Render(block)
 
 	fmt.Fprint(w, block)

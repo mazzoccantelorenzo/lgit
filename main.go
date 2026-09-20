@@ -71,7 +71,16 @@ func initialModel() model {
 		branches = []string{"master"}
 	}
 
-	commits, _ := core.FetchCommits(branches[0])
+	currentBranch := core.FetchCurrentBranch()
+	branchIndex := 0
+	for i, b := range branches {
+		if b == currentBranch {
+			branchIndex = i
+			break
+		}
+	}
+
+	commits, _ := core.FetchCommits(branches[branchIndex])
 
 	var items []list.Item
 	for _, c := range commits {
@@ -79,7 +88,7 @@ func initialModel() model {
 	}
 
 	m := list.New(items, newCustomDelegate(false), 0, 0)
-	m.Title = fmt.Sprintf("Git Log TUI  [ Tab: branch | Space: expand ]  Branch: %s", branches[0])
+	m.Title = fmt.Sprintf("Git Log TUI  [ Tab: branch | Space: expand ]  Branch: %s", branches[branchIndex])
 	m.SetShowStatusBar(true)
 
 	fList := list.New([]list.Item{}, newFileDelegate(), 0, 0)
@@ -94,7 +103,7 @@ func initialModel() model {
 		diffView:    vp,
 		state:       0,
 		branches:    branches,
-		branchIndex: 0,
+		branchIndex: branchIndex,
 	}
 }
 
@@ -151,7 +160,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					for _, c := range commits {
 						items = append(items, commitItem{commit: c})
 					}
+					oldIdx := m.commitList.Index()
 					m.commitList.SetItems(items)
+					if oldIdx < len(items) {
+						m.commitList.Select(oldIdx)
+					}
 				}
 			}
 		}
