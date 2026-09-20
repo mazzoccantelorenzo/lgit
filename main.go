@@ -30,7 +30,9 @@ func (i commitItem) Title() string { return fmt.Sprintf("%s  %s", i.commit.ID, i
 func (i commitItem) Description() string {
 	return fmt.Sprintf("%s • %s", i.commit.Author, i.commit.Date)
 }
-func (i commitItem) FilterValue() string { return i.commit.Message }
+func (i commitItem) FilterValue() string {
+	return fmt.Sprintf("%s %s %s", i.commit.ID, i.commit.Message, i.commit.Author)
+}
 
 type fileItem struct {
 	file core.FileChange
