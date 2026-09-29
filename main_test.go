@@ -63,18 +63,18 @@ func TestCommitPreviewFollowsSelection(t *testing.T) {
 	if got := lipgloss.Height(screen); got > 40 {
 		t.Errorf("split view is %d rows high, terminal is 40", got)
 	}
-	updated, _ = current.Update(tea.KeyMsg{Type: tea.KeyCtrlDown})
+	updated, _ = current.Update(tea.KeyMsg{Type: tea.KeyShiftDown})
 	current = updated.(model)
 	if selectedFilePath(current.fileList) != "screening.txt" || !strings.Contains(current.View(), "Screening complete") {
-		t.Fatal("Cmd+Down did not move the preview to the next file")
+		t.Fatal("Shift+Down did not move the preview to the next file")
 	}
-	if current.selectedCommit.Message != "record interview" || !strings.Contains(current.View(), "⌘↑/⌘↓") {
+	if current.selectedCommit.Message != "record interview" || !strings.Contains(current.View(), "Shift↑/↓") {
 		t.Fatal("file navigation changed the commit or lost its shortcut hint")
 	}
-	updated, _ = current.Update(tea.KeyMsg{Type: tea.KeyCtrlUp})
+	updated, _ = current.Update(tea.KeyMsg{Type: tea.KeyShiftUp})
 	current = updated.(model)
 	if selectedFilePath(current.fileList) != "interview.txt" || !strings.Contains(current.View(), "Interview booked") {
-		t.Fatal("Cmd+Up did not move the preview to the previous file")
+		t.Fatal("Shift+Up did not move the preview to the previous file")
 	}
 	for _, size := range []tea.WindowSizeMsg{{Width: 40, Height: 40}, {Width: 80, Height: 8}} {
 		updated, _ = current.Update(size)
@@ -167,5 +167,10 @@ func TestCommitPreviewFollowsSelection(t *testing.T) {
 	current = updated.(model)
 	if current.state != 0 {
 		t.Fatal("escape did not return to the split commit list")
+	}
+	updated, _ = current.Update(updateAvailableMsg{})
+	current = updated.(model)
+	if !strings.Contains(current.View(), "lgit update available") {
+		t.Fatal("available update warning is missing from the commit list")
 	}
 }

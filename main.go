@@ -57,12 +57,13 @@ type model struct {
 	fileList   list.Model
 	diffView   viewport.Model
 
-	state          int // 0 = Commits, 1 = Commit Files/Diff, 2 = Branch Files/Diff
-	width          int
-	height         int
-	selectedCommit core.Commit
-	previewRequest uint64
-	previewLoading bool
+	state           int // 0 = Commits, 1 = Commit Files/Diff, 2 = Branch Files/Diff
+	width           int
+	height          int
+	selectedCommit  core.Commit
+	previewRequest  uint64
+	previewLoading  bool
+	updateAvailable bool
 
 	branches    []string
 	branchIndex int
@@ -131,6 +132,15 @@ func tickCmd() tea.Cmd {
 	})
 }
 
+// commitListTitle is the list heading that keeps update warnings visible across refreshes.
+func commitListTitle(branch string, updateAvailable bool) string {
+	title := fmt.Sprintf("Git Log TUI  [ Tab: branch | Space: expand ]  Branch: %s", branch)
+	if updateAvailable {
+		return "⚠ lgit update available  |  " + title
+	}
+	return title
+}
+
 func initialModel() model {
 	branches, _ := core.FetchBranches()
 	if len(branches) == 0 {
@@ -154,7 +164,7 @@ func initialModel() model {
 	}
 
 	m := list.New(items, newCustomDelegate(false), 0, 0)
-	m.Title = fmt.Sprintf("Git Log TUI  [ Tab: branch | Space: expand ]  Branch: %s", branches[branchIndex])
+	m.Title = commitListTitle(branches[branchIndex], false)
 	m.SetShowStatusBar(true)
 
 	fList := list.New([]list.Item{}, newFileDelegate(), 0, 0)
@@ -219,7 +229,7 @@ func (m *model) replaceCommits(branch string, commits []core.Commit) tea.Cmd {
 		}
 	}
 	filterCommand := routeListCommand(m.commitList.SetItems(items), commitListTarget)
-	m.commitList.Title = fmt.Sprintf("Git Log TUI  [ Tab: branch | Space: expand ]  Branch: %s", branch)
+	m.commitList.Title = commitListTitle(branch, m.updateAvailable)
 	if len(items) > 0 {
 		if selectedIndex < 0 {
 			selectedIndex = 0
@@ -294,9 +304,9 @@ func (m *model) selectPreviewFile(direction int) {
 
 func (m model) Init() tea.Cmd {
 	if m.selectedCommit.ID == "" {
-		return tickCmd()
+		return tea.Batch(tickCmd(), checkForUpdates())
 	}
-	return tea.Batch(tickCmd(), fetchCommitPreview(m.selectedCommit.ID, m.previewRequest))
+	return tea.Batch(tickCmd(), checkForUpdates(), fetchCommitPreview(m.selectedCommit.ID, m.previewRequest))
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -306,6 +316,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case rebaseFinishedMsg:
 		return m, m.updateCommits()
+	case updateAvailableMsg:
+		m.updateAvailable = true
+		m.commitList.Title = commitListTitle(m.branches[m.branchIndex], true)
+		return m, nil
 	case commitPreviewMsg:
 		if msg.commitID != m.selectedCommit.ID || msg.requestID != m.previewRequest || m.state == 2 {
 			return m, nil
@@ -363,7 +377,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.commitList.FilterState() == list.Unfiltered && !sameCommits(m.commitList.Items(), commits) {
 				cmds = append(cmds, m.replaceCommits(branch, commits))
 			}
-			m.commitList.Title = fmt.Sprintf("Git Log TUI  [ Tab: branch | Space: expand ]  Branch: %s", branch)
+			m.commitList.Title = commitListTitle(branch, m.updateAvailable)
 		}
 		return m, tea.Batch(append(cmds, tickCmd())...)
 
@@ -382,10 +396,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if m.state == 0 {
 			if !isFiltering {
-				if msg.String() == "ctrl+down" {
+				if msg.String() == "shift+down" {
 					m.selectPreviewFile(1)
 					return m, nil
-				} else if msg.String() == "ctrl+up" {
+				} else if msg.String() == "shift+up" {
 					m.selectPreviewFile(-1)
 					return m, nil
 				} else if msg.String() == "tab" {
@@ -647,7 +661,7 @@ func (m model) renderCompactPreview(width int) string {
 		fileText = "Loading files..."
 	}
 	fileLine := lipgloss.NewStyle().Foreground(lipgloss.Color("#8b949e")).Render(ansi.Truncate(fileText, contentWidth, "…"))
-	footerText := " [⌘↑/⌘↓] Files  [→] Open "
+	footerText := " [Shift↑/↓] Files  [→] Open "
 	if m.state != 0 {
 		footerText = " [↑/↓] Files  [←] Back "
 	}
@@ -675,7 +689,7 @@ func (m model) renderDetails(width int, preview bool) string {
 	}
 	header := headerStyle.Render(ansi.Truncate(headerText, diffWidth, "…"))
 
-	footerText := " [⌘↑/⌘↓] Files  [→] Open "
+	footerText := " [Shift↑/↓] Files  [→] Open "
 	if !preview {
 		footerText = " [←] Sidebar  [→] Scroll Diff "
 		if m.diffFocus {
