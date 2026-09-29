@@ -2,17 +2,19 @@ package core
 
 import (
 	"bytes"
+	"fmt"
 	"os/exec"
 	"strings"
 )
 
 // Commit represents a single Git commit parsed from the history.
 type Commit struct {
-	ID      string
-	Message string
-	Body    string
-	Author  string
-	Date    string
+	ID          string
+	Message     string
+	Body        string
+	Author      string
+	Date        string
+	Decorations string
 }
 
 // FileChange represents a file that was modified in a commit.
@@ -38,31 +40,35 @@ func FetchBranches() ([]string, error) {
 }
 
 func FetchCommits(branch string) ([]Commit, error) {
-	cmd := exec.Command("git", "log", branch, "-n", "1000", "--pretty=format:%h|%s|%an|%cr|%b%n---END_COMMIT---")
+	// Git separates records and fields with NUL bytes. Commit messages can contain
+	// the printable delimiters used in ordinary log output, and ref names can
+	// contain commas, so keep %D in Git's display format rather than splitting it.
+	cmd := exec.Command("git", "log", branch, "-n", "1000", "--decorate=short", "-z", "--pretty=tformat:%h%x00%s%x00%an%x00%cr%x00%D%x00%b")
 	var out bytes.Buffer
 	cmd.Stdout = &out
-	err := cmd.Run()
-	if err != nil {
+	if err := cmd.Run(); err != nil {
 		return nil, err
 	}
 
+	if out.Len() == 0 {
+		return nil, nil
+	}
+	fields := bytes.Split(out.Bytes(), []byte{0})
+	if len(fields[len(fields)-1]) != 0 || (len(fields)-1)%6 != 0 {
+		return nil, fmt.Errorf("unexpected git log output: incomplete commit record")
+	}
+	fields = fields[:len(fields)-1] // The final NUL terminates the last record.
+
 	var commits []Commit
-	blocks := strings.Split(out.String(), "---END_COMMIT---")
-	for _, block := range blocks {
-		block = strings.TrimSpace(block)
-		if block == "" {
-			continue
-		}
-		parts := strings.SplitN(block, "|", 5)
-		if len(parts) == 5 {
-			commits = append(commits, Commit{
-				ID:      strings.TrimSpace(parts[0]),
-				Message: strings.TrimSpace(parts[1]),
-				Author:  strings.TrimSpace(parts[2]),
-				Date:    strings.TrimSpace(parts[3]),
-				Body:    strings.TrimSpace(parts[4]),
-			})
-		}
+	for i := 0; i < len(fields); i += 6 {
+		commits = append(commits, Commit{
+			ID:          strings.TrimSpace(string(fields[i])),
+			Message:     strings.TrimSpace(string(fields[i+1])),
+			Author:      strings.TrimSpace(string(fields[i+2])),
+			Date:        strings.TrimSpace(string(fields[i+3])),
+			Decorations: strings.TrimSpace(string(fields[i+4])),
+			Body:        strings.TrimSpace(string(fields[i+5])),
+		})
 	}
 	return commits, nil
 }
@@ -107,7 +113,7 @@ func FetchBranchFileDiff(branch, filePath string) (string, error) {
 }
 
 func FetchCommitFiles(commitID string) ([]FileChange, error) {
-	cmd := exec.Command("git", "diff-tree", "--no-commit-id", "--name-status", "-r", commitID)
+	cmd := exec.Command("git", "diff-tree", "--root", "--no-commit-id", "--name-status", "-r", commitID)
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	err := cmd.Run()
@@ -134,19 +140,11 @@ func FetchCommitFiles(commitID string) ([]FileChange, error) {
 
 // FetchFileDiff is the function that extracts the diff content for a specific file in a commit.
 func FetchFileDiff(commitID, filePath string) (string, error) {
-	cmd := exec.Command("git", "show", commitID+"^!"+":"+filePath)
+	cmd := exec.Command("git", "show", "--format=", "--no-ext-diff", commitID, "--", filePath)
 	var out bytes.Buffer
 	cmd.Stdout = &out
-	err := cmd.Run()
-	if err != nil {
-		fallback := exec.Command("git", "diff", commitID+"^", commitID, "--", filePath)
-		var fbOut bytes.Buffer
-		fallback.Stdout = &fbOut
-		fbErr := fallback.Run()
-		if fbErr != nil {
-			return "Diff non disponibile", nil
-		}
-		return fbOut.String(), nil
+	if err := cmd.Run(); err != nil {
+		return "", err
 	}
 	return out.String(), nil
 }

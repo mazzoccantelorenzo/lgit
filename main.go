@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/loreenzo/lorenzogit/core"
 )
 
@@ -20,6 +21,15 @@ var (
 	sidebarStyle = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("#30363d")).Padding(1, 2)
 	diffStyle    = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("#30363d")).Padding(1, 2)
 	headerStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#c9d1d9")).Bold(true).PaddingBottom(1)
+)
+
+const compactPreviewWidth = 72
+const minimumSplitWidth = 60
+const minimumDetailHeight = 12
+
+const (
+	commitListTarget = iota
+	fileListTarget
 )
 
 type commitItem struct {
@@ -51,6 +61,8 @@ type model struct {
 	width          int
 	height         int
 	selectedCommit core.Commit
+	previewRequest uint64
+	previewLoading bool
 
 	branches    []string
 	branchIndex int
@@ -60,6 +72,58 @@ type model struct {
 
 type rebaseFinishedMsg struct{ err error }
 type tickMsg time.Time
+
+// routedFilterMsg is a list filter result tagged with the pane that requested it.
+type routedFilterMsg struct {
+	target  int
+	matches list.FilterMatchesMsg
+}
+
+// routeListCommand is the command wrapper that keeps asynchronous filter results in their list.
+func routeListCommand(command tea.Cmd, target int) tea.Cmd {
+	if command == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		message := command()
+		switch result := message.(type) {
+		case list.FilterMatchesMsg:
+			return routedFilterMsg{target: target, matches: result}
+		case tea.BatchMsg:
+			routed := make(tea.BatchMsg, len(result))
+			for index, nestedCommand := range result {
+				routed[index] = routeListCommand(nestedCommand, target)
+			}
+			return routed
+		default:
+			return message
+		}
+	}
+}
+
+// commitPreviewMsg is the selected commit's file list and first file diff.
+type commitPreviewMsg struct {
+	commitID  string
+	requestID uint64
+	files     []core.FileChange
+	diff      string
+	err       error
+}
+
+// fetchCommitPreview is the command that loads detail content without blocking navigation.
+func fetchCommitPreview(commitID string, requestID uint64) tea.Cmd {
+	return func() tea.Msg {
+		files, err := core.FetchCommitFiles(commitID)
+		if err != nil {
+			return commitPreviewMsg{commitID: commitID, requestID: requestID, err: err}
+		}
+		if len(files) == 0 {
+			return commitPreviewMsg{commitID: commitID, requestID: requestID, files: files, diff: "No diff available."}
+		}
+		diff, err := core.FetchFileDiff(commitID, files[0].Path)
+		return commitPreviewMsg{commitID: commitID, requestID: requestID, files: files, diff: diff, err: err}
+	}
+}
 
 func tickCmd() tea.Cmd {
 	return tea.Tick(time.Second, func(t time.Time) tea.Msg {
@@ -99,7 +163,7 @@ func initialModel() model {
 
 	vp := viewport.New(0, 0)
 
-	return model{
+	result := model{
 		commitList:  m,
 		fileList:    fList,
 		diffView:    vp,
@@ -107,23 +171,118 @@ func initialModel() model {
 		branches:    branches,
 		branchIndex: branchIndex,
 	}
+	result.selectCommitPreview()
+	return result
 }
 
-func (m *model) updateCommits() {
+// selectCommitPreview is the selection handler that keeps the right pane on the highlighted commit.
+func (m *model) selectCommitPreview() tea.Cmd {
+	item, ok := m.commitList.SelectedItem().(commitItem)
+	if !ok {
+		m.previewRequest++
+		m.selectedCommit = core.Commit{}
+		m.fileList.ResetFilter()
+		m.fileList.SetItems(nil)
+		m.diffView.SetContent("No commit selected.")
+		m.previewLoading = false
+		return nil
+	}
+	if item.commit.ID == m.selectedCommit.ID {
+		m.selectedCommit = item.commit
+		return nil
+	}
+
+	m.selectedCommit = item.commit
+	m.fileList.ResetFilter()
+	m.fileList.SetItems(nil)
+	m.fileList.Title = "Commit Files"
+	m.diffView.SetContent("Loading commit preview...")
+	m.diffView.GotoTop()
+	m.previewRequest++
+	m.previewLoading = true
+	return fetchCommitPreview(item.commit.ID, m.previewRequest)
+}
+
+// replaceCommits is the list refresh that keeps the selected commit when new history arrives.
+func (m *model) replaceCommits(branch string, commits []core.Commit) tea.Cmd {
+	selectedID := ""
+	if item, ok := m.commitList.SelectedItem().(commitItem); ok {
+		selectedID = item.commit.ID
+	}
+	m.commitList.ResetFilter()
+	selectedIndex := m.commitList.Index()
+	var items []list.Item
+	for index, commit := range commits {
+		items = append(items, commitItem{commit: commit})
+		if commit.ID == selectedID {
+			selectedIndex = index
+		}
+	}
+	filterCommand := routeListCommand(m.commitList.SetItems(items), commitListTarget)
+	m.commitList.Title = fmt.Sprintf("Git Log TUI  [ Tab: branch | Space: expand ]  Branch: %s", branch)
+	if len(items) > 0 {
+		if selectedIndex < 0 {
+			selectedIndex = 0
+		}
+		if selectedIndex >= len(items) {
+			selectedIndex = len(items) - 1
+		}
+		m.commitList.Select(selectedIndex)
+	}
+	if m.state == 0 {
+		return tea.Batch(filterCommand, m.selectCommitPreview())
+	}
+	return filterCommand
+}
+
+// updateCommits is the refresh handler for the branch selected in the commit list.
+func (m *model) updateCommits() tea.Cmd {
 	branch := m.branches[m.branchIndex]
 	commits, _ := core.FetchCommits(branch)
-	var items []list.Item
-	for _, c := range commits {
-		items = append(items, commitItem{commit: c})
+	return m.replaceCommits(branch, commits)
+}
+
+// selectedFilePath is the file identity used to notice selection changes after list filtering.
+func selectedFilePath(fileList list.Model) string {
+	if item, ok := fileList.SelectedItem().(fileItem); ok {
+		return item.file.Path
 	}
-	oldIdx := m.commitList.Index()
-	m.commitList.SetItems(items)
-	m.commitList.Title = fmt.Sprintf("Git Log TUI  [ Tab: branch | Space: expand ]  Branch: %s", branch)
-	m.commitList.Select(oldIdx)
+	return ""
+}
+
+// updateSelectedFileDiff is the detail refresh when the file selection changes.
+func (m *model) updateSelectedFileDiff(previousPath string) {
+	if m.state == 0 {
+		return
+	}
+	item, ok := m.fileList.SelectedItem().(fileItem)
+	if !ok {
+		m.diffView.SetContent("No file selected.")
+		return
+	}
+	if item.file.Path == previousPath {
+		return
+	}
+	var diff string
+	var err error
+	if m.state == 1 {
+		diff, err = core.FetchFileDiff(m.selectedCommit.ID, item.file.Path)
+	} else {
+		diff, err = core.FetchBranchFileDiff(m.branches[m.branchIndex], item.file.Path)
+	}
+	if err != nil {
+		m.diffView.SetContent("Could not load file diff: " + err.Error())
+	} else {
+		m.diffView.SetContent(colorizeDiff(diff))
+	}
+	m.diffView.GotoTop()
 }
 
 func (m model) Init() tea.Cmd {
-	return tickCmd()
+	if m.selectedCommit.ID == "" {
+		return tickCmd()
+	}
+	return tea.Batch(tickCmd(), fetchCommitPreview(m.selectedCommit.ID, m.previewRequest))
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -132,48 +291,73 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case rebaseFinishedMsg:
-		m.updateCommits()
-		return m, nil
+		return m, m.updateCommits()
+	case commitPreviewMsg:
+		if msg.commitID != m.selectedCommit.ID || msg.requestID != m.previewRequest || m.state == 2 {
+			return m, nil
+		}
+		m.previewLoading = false
+		if msg.err != nil {
+			m.fileList.SetItems(nil)
+			m.diffView.SetContent("Could not load commit preview: " + msg.err.Error())
+			return m, nil
+		}
+		var items []list.Item
+		for _, file := range msg.files {
+			items = append(items, fileItem{file: file})
+		}
+		filterCommand := m.fileList.SetItems(items)
+		m.fileList.Select(0)
+		m.diffView.SetContent(colorizeDiff(msg.diff))
+		m.diffView.GotoTop()
+		return m, routeListCommand(filterCommand, fileListTarget)
+	case routedFilterMsg:
+		if msg.target == commitListTarget {
+			m.commitList, cmd = m.commitList.Update(msg.matches)
+			if m.state == 0 {
+				return m, tea.Batch(routeListCommand(cmd, commitListTarget), m.selectCommitPreview())
+			}
+			return m, routeListCommand(cmd, commitListTarget)
+		}
+		previousFile := selectedFilePath(m.fileList)
+		m.fileList, cmd = m.fileList.Update(msg.matches)
+		m.updateSelectedFileDiff(previousFile)
+		return m, routeListCommand(cmd, fileListTarget)
+	case list.FilterMatchesMsg:
+		// A direct result can come from a list command issued before a pane switch.
+		target := commitListTarget
+		if m.state != 0 {
+			target = fileListTarget
+		}
+		return m.Update(routedFilterMsg{target: target, matches: msg})
 	case tickMsg:
 		// Re-fetch branches and commits in background to check for updates
 		branches, _ := core.FetchBranches()
 		if len(branches) > 0 {
+			selectedBranch := m.branches[m.branchIndex]
 			m.branches = branches
-			if m.branchIndex >= len(m.branches) {
-				m.branchIndex = 0
+			m.branchIndex = 0
+			for index, branch := range branches {
+				if branch == selectedBranch {
+					m.branchIndex = index
+					break
+				}
 			}
 			branch := m.branches[m.branchIndex]
 			commits, _ := core.FetchCommits(branch)
 
-			if len(commits) > 0 {
-				needsUpdate := false
-				if len(commits) != len(m.commitList.Items()) {
-					needsUpdate = true
-				} else if len(m.commitList.Items()) > 0 {
-					topExistingID := m.commitList.Items()[0].(commitItem).commit.ID
-					topExistingDate := m.commitList.Items()[0].(commitItem).commit.Date
-					if commits[0].ID != topExistingID || commits[0].Date != topExistingDate {
-						needsUpdate = true
-					}
-				}
-
-				if needsUpdate {
-					var items []list.Item
-					for _, c := range commits {
-						items = append(items, commitItem{commit: c})
-					}
-					oldIdx := m.commitList.Index()
-					m.commitList.SetItems(items)
-					if oldIdx < len(items) {
-						m.commitList.Select(oldIdx)
-					}
-				}
+			if m.commitList.FilterState() == list.Unfiltered && !sameCommits(m.commitList.Items(), commits) {
+				cmds = append(cmds, m.replaceCommits(branch, commits))
 			}
+			m.commitList.Title = fmt.Sprintf("Git Log TUI  [ Tab: branch | Space: expand ]  Branch: %s", branch)
 		}
-		return m, tickCmd()
+		return m, tea.Batch(append(cmds, tickCmd())...)
 
 	case tea.KeyMsg:
 		isFiltering := m.commitList.FilterState() == list.Filtering
+		if m.state != 0 {
+			isFiltering = m.fileList.FilterState() == list.Filtering
+		}
 
 		if msg.String() == "ctrl+c" {
 			return m, tea.Quit
@@ -186,12 +370,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if !isFiltering {
 				if msg.String() == "tab" {
 					m.branchIndex = (m.branchIndex + 1) % len(m.branches)
-					m.updateCommits()
-					return m, nil
+					return m, m.updateCommits()
 				} else if msg.String() == "shift+tab" {
 					m.branchIndex = (m.branchIndex - 1 + len(m.branches)) % len(m.branches)
-					m.updateCommits()
-					return m, nil
+					return m, m.updateCommits()
 				} else if msg.String() == " " {
 					m.expanded = !m.expanded
 					m.commitList.SetDelegate(newCustomDelegate(m.expanded))
@@ -214,28 +396,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						}
 					}
 				} else if msg.String() == "enter" || msg.String() == "right" || msg.String() == "l" {
-					if i, ok := m.commitList.SelectedItem().(commitItem); ok {
-						m.selectedCommit = i.commit
-						files, _ := core.FetchCommitFiles(m.selectedCommit.ID)
-
-						var fItems []list.Item
-						for _, f := range files {
-							fItems = append(fItems, fileItem{file: f})
-						}
-						m.fileList.SetItems(fItems)
-						m.fileList.Title = "Commit Files"
-
-						if len(files) > 0 {
-							diff, _ := core.FetchFileDiff(m.selectedCommit.ID, files[0].Path)
-							m.diffView.SetContent(colorizeDiff(diff))
-						} else {
-							m.diffView.SetContent("No diff available.")
-						}
-
+					if _, ok := m.commitList.SelectedItem().(commitItem); ok {
 						m.state = 1
+						m.applyLayout()
 						return m, nil
 					}
 				} else if msg.String() == "b" {
+					m.previewRequest++
 					branch := m.branches[m.branchIndex]
 					files, _ := core.FetchBranchFiles(branch)
 
@@ -243,6 +410,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					for _, f := range files {
 						fItems = append(fItems, fileItem{file: f})
 					}
+					m.fileList.ResetFilter()
 					m.fileList.SetItems(fItems)
 					m.fileList.Title = "Branch Files (" + branch + ")"
 
@@ -253,26 +421,44 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.diffView.SetContent("No diff available (branch is even with master).")
 					}
 					m.state = 2
+					m.applyLayout()
 					return m, nil
 				}
 			}
 
 			m.commitList, cmd = m.commitList.Update(msg)
-			cmds = append(cmds, cmd)
+			cmds = append(cmds, routeListCommand(cmd, commitListTarget))
+			cmds = append(cmds, m.selectCommitPreview())
 
 		} else if m.state == 1 || m.state == 2 {
+			if m.fileList.FilterState() == list.Filtering {
+				previousFile := selectedFilePath(m.fileList)
+				m.fileList, cmd = m.fileList.Update(msg)
+				m.updateSelectedFileDiff(previousFile)
+				return m, routeListCommand(cmd, fileListTarget)
+			}
 			if msg.String() == "esc" {
+				wasBranchDetails := m.state == 2
 				m.state = 0
 				m.diffFocus = false
-				return m, nil
+				m.applyLayout()
+				if wasBranchDetails {
+					m.selectedCommit = core.Commit{}
+				}
+				return m, m.selectCommitPreview()
 			}
 			if msg.String() == "left" || msg.String() == "h" {
 				if m.diffFocus {
 					m.diffFocus = false
 					return m, nil
 				}
+				wasBranchDetails := m.state == 2
 				m.state = 0
-				return m, nil
+				m.applyLayout()
+				if wasBranchDetails {
+					m.selectedCommit = core.Commit{}
+				}
+				return m, m.selectCommitPreview()
 			}
 			if msg.String() == "right" || msg.String() == "l" {
 				m.diffFocus = true
@@ -280,22 +466,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			if !m.diffFocus {
-				oldIndex := m.fileList.Index()
+				previousFile := selectedFilePath(m.fileList)
 				m.fileList, cmd = m.fileList.Update(msg)
-				cmds = append(cmds, cmd)
-
-				if m.fileList.Index() != oldIndex {
-					if f, ok := m.fileList.SelectedItem().(fileItem); ok {
-						var diff string
-						if m.state == 1 {
-							diff, _ = core.FetchFileDiff(m.selectedCommit.ID, f.file.Path)
-						} else {
-							diff, _ = core.FetchBranchFileDiff(m.branches[m.branchIndex], f.file.Path)
-						}
-						m.diffView.SetContent(colorizeDiff(diff))
-						m.diffView.GotoTop()
-					}
-				}
+				cmds = append(cmds, routeListCommand(cmd, fileListTarget))
+				m.updateSelectedFileDiff(previousFile)
 			} else {
 				m.diffView, cmd = m.diffView.Update(msg)
 				cmds = append(cmds, cmd)
@@ -304,28 +478,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.WindowSizeMsg:
 		docW, docH := docStyle.GetFrameSize()
-		sideW, sideH := sidebarStyle.GetFrameSize()
-		_ = sideW
-
 		m.width = msg.Width - docW
 		m.height = msg.Height - docH - 1 // 1 line safety
-
-		m.commitList.SetSize(m.width, m.height)
-
-		innerSideHeight := m.height - sideH
-		if innerSideHeight < 1 {
-			innerSideHeight = 1
-		}
-
-		m.fileList.SetSize(m.width/3, innerSideHeight)
-
-		m.diffView.Width = m.width - (m.width / 3) - 6
-
-		diffHeight := innerSideHeight - 2
-		if diffHeight < 1 {
-			diffHeight = 1
-		}
-		m.diffView.Height = diffHeight
+		m.applyLayout()
 	}
 
 	return m, tea.Batch(cmds...)
@@ -353,68 +508,211 @@ func colorizeDiff(diff string) string {
 	return strings.Join(out, "\n")
 }
 
-func (m model) View() string {
-	// Removed strict terminal bounds to allow any zoom level
+// clipLines is the terminal-safe renderer that keeps long diff lines inside their pane.
+func clipLines(content string, width int) string {
+	lines := strings.Split(content, "\n")
+	for index, line := range lines {
+		lines[index] = ansi.Truncate(line, width, "")
+	}
+	return strings.Join(lines, "\n")
+}
 
-	if m.state == 0 {
-		return docStyle.Render(m.commitList.View())
+// clipRows is the terminal-safe renderer that avoids drawing below a short screen.
+func clipRows(content string, height int) string {
+	if height <= 0 {
+		return ""
+	}
+	lines := strings.Split(content, "\n")
+	if len(lines) > height {
+		lines = lines[:height]
+	}
+	return strings.Join(lines, "\n")
+}
+
+// sameCommits is the comparison that detects changes to commits and their Git ref labels.
+func sameCommits(items []list.Item, commits []core.Commit) bool {
+	if len(items) != len(commits) {
+		return false
+	}
+	for index, item := range items {
+		current, ok := item.(commitItem)
+		if !ok || current.commit != commits[index] {
+			return false
+		}
+	}
+	return true
+}
+
+// detailDimensions is the layout calculation shared by the preview and full detail view.
+func detailDimensions(width, height int) (fileWidth, diffWidth, innerHeight int) {
+	sideFrameWidth, sideFrameHeight := sidebarStyle.GetFrameSize()
+	diffFrameWidth, _ := diffStyle.GetFrameSize()
+	contentWidth := width - sideFrameWidth - diffFrameWidth
+	if contentWidth < 2 {
+		contentWidth = 2
+	}
+	fileWidth = contentWidth / 3
+	if fileWidth < 1 {
+		fileWidth = 1
+	}
+	diffWidth = contentWidth - fileWidth
+	innerHeight = height - sideFrameHeight
+	if innerHeight < 1 {
+		innerHeight = 1
+	}
+	return
+}
+
+// panelStyle is the size adapter that accounts for Lip Gloss padding inside Width and Height.
+func panelStyle(style lipgloss.Style, contentWidth, contentHeight int) lipgloss.Style {
+	return style.
+		Width(contentWidth + style.GetPaddingLeft() + style.GetPaddingRight()).
+		Height(contentHeight + style.GetPaddingTop() + style.GetPaddingBottom())
+}
+
+// applyLayout is the sizing handler that gives the log and detail panes their available space.
+func (m *model) applyLayout() {
+	if m.width <= 0 || m.height <= 0 {
+		return
+	}
+	commitWidth := m.width
+	detailWidth := m.width
+	if m.state == 0 && m.width >= minimumSplitWidth && m.height >= minimumDetailHeight {
+		commitWidth = m.width / 2
+		detailWidth = m.width - commitWidth
+	}
+	m.commitList.SetShowHelp(m.height >= 28 && m.width >= minimumSplitWidth)
+	m.commitList.SetShowStatusBar(m.height >= 28 && m.width >= minimumSplitWidth)
+	m.fileList.SetShowHelp(m.height >= 28 && m.width >= minimumSplitWidth)
+	m.commitList.SetSize(commitWidth, m.height)
+	fileWidth, diffWidth, innerHeight := detailDimensions(detailWidth, m.height)
+	m.fileList.SetSize(fileWidth, innerHeight)
+	m.diffView.Width = diffWidth
+	m.diffView.Height = innerHeight - 3 // One header line, its spacer, and the footer.
+	if (m.state == 0 && detailWidth < compactPreviewWidth) || (m.state != 0 && m.width < minimumSplitWidth) {
+		frameWidth, _ := diffStyle.GetFrameSize()
+		m.diffView.Width = detailWidth - frameWidth
+		m.diffView.Height = innerHeight - 4 // Header, file name, spacer, and footer.
+	}
+	if m.diffView.Width < 1 {
+		m.diffView.Width = 1
+	}
+	if m.diffView.Height < 1 {
+		m.diffView.Height = 1
+	}
+}
+
+// renderCompactPreview is the narrow pane that shows the selected file and its diff at readable width.
+func (m model) renderCompactPreview(width int) string {
+	frameWidth, _ := diffStyle.GetFrameSize()
+	contentWidth := width - frameWidth
+	_, _, innerHeight := detailDimensions(width, m.height)
+
+	headerText := m.selectedCommit.Message
+	if m.state == 2 {
+		headerText = "Changes in branch: " + m.branches[m.branchIndex]
+	}
+	if headerText == "" {
+		headerText = "Commit preview"
+	}
+	header := headerStyle.Render(ansi.Truncate(headerText, contentWidth, "…"))
+
+	fileText := "No files changed"
+	if item, ok := m.fileList.SelectedItem().(fileItem); ok {
+		fileText = item.file.Path
+		if count := len(m.fileList.Items()); count > 1 {
+			fileText = fmt.Sprintf("%s (%d files)", fileText, count)
+		}
+	} else if m.previewLoading {
+		fileText = "Loading files..."
+	}
+	fileLine := lipgloss.NewStyle().Foreground(lipgloss.Color("#8b949e")).Render(ansi.Truncate(fileText, contentWidth, "…"))
+	footerText := " [→] Open "
+	if m.state != 0 {
+		footerText = " [↑/↓] Files  [←] Back "
+	}
+	footer := lipgloss.NewStyle().Foreground(lipgloss.Color("#8b949e")).Render(ansi.Truncate(footerText, contentWidth, ""))
+	content := lipgloss.JoinVertical(lipgloss.Left, header, fileLine, clipLines(m.diffView.View(), contentWidth), footer)
+	return panelStyle(diffStyle, contentWidth, innerHeight).Render(content)
+}
+
+// renderDetails is the shared file-list and diff view for previews and opened commits.
+func (m model) renderDetails(width int, preview bool) string {
+	fileWidth, diffWidth, innerHeight := detailDimensions(width, m.height)
+	if width < 16 {
+		return lipgloss.NewStyle().Width(width).Height(m.height).Render("Preview")
+	}
+	if (preview && width < compactPreviewWidth) || (!preview && width < minimumSplitWidth) {
+		return m.renderCompactPreview(width)
 	}
 
-	fileListWidth := m.width / 3
-	if fileListWidth < 5 {
-		fileListWidth = 5
+	headerText := m.selectedCommit.Message
+	if m.state == 2 && !preview {
+		headerText = "Changes in branch: " + m.branches[m.branchIndex]
 	}
+	if headerText == "" {
+		headerText = "Commit preview"
+	}
+	header := headerStyle.Render(ansi.Truncate(headerText, diffWidth, "…"))
 
-	var header string
-	if m.state == 1 {
-		header = headerStyle.Render(m.selectedCommit.Message)
-	} else {
-		header = headerStyle.Render("Changes in branch: " + m.branches[m.branchIndex])
+	footerText := " [→] Open "
+	if !preview {
+		footerText = " [←] Sidebar  [→] Scroll Diff "
+		if m.diffFocus {
+			footerText = " [↑/↓] Scroll  [←] Back to Sidebar "
+		}
 	}
-
-	diffWidth := m.width - fileListWidth - 2
-	if diffWidth < 5 {
-		diffWidth = 5
+	footerRight := fmt.Sprintf(" %3d%% ", int(m.diffView.ScrollPercent()*100))
+	if diffWidth < lipgloss.Width(footerRight) {
+		footerRight = ansi.Truncate(footerRight, diffWidth, "")
 	}
-
-	footerText := " [←] Sidebar  [→] Scroll Diff "
-	if m.diffFocus {
-		footerText = " [↑/↓] Scroll  [←] Back to Sidebar "
-	}
-	percent := int(m.diffView.ScrollPercent() * 100)
-	footerRight := fmt.Sprintf(" %3d%% ", percent)
+	footerText = ansi.Truncate(footerText, diffWidth-lipgloss.Width(footerRight), "")
+	footerGap := diffWidth - lipgloss.Width(footerText) - lipgloss.Width(footerRight)
 
 	footerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#8b949e")).Background(lipgloss.Color("#161b22"))
-	if m.diffFocus {
+	if !preview && m.diffFocus {
 		footerStyle = footerStyle.Foreground(lipgloss.Color("#c9d1d9")).Background(lipgloss.Color("#1f6feb"))
 	}
-
 	footer := lipgloss.JoinHorizontal(lipgloss.Top,
 		footerStyle.Render(footerText),
-		lipgloss.NewStyle().Width(diffWidth-lipgloss.Width(footerText)-lipgloss.Width(footerRight)).Render(""),
+		strings.Repeat(" ", footerGap),
 		footerStyle.Render(footerRight),
 	)
 
-	diffContent := lipgloss.JoinVertical(lipgloss.Left, header, m.diffView.View(), footer)
-
-	rStyle := diffStyle.Copy()
-	lStyle := sidebarStyle.Copy()
-	if m.diffFocus {
-		rStyle = rStyle.BorderForeground(lipgloss.Color("#58a6ff"))
-	} else {
-		lStyle = lStyle.BorderForeground(lipgloss.Color("#58a6ff"))
+	diffContent := lipgloss.JoinVertical(lipgloss.Left, header, clipLines(m.diffView.View(), diffWidth), footer)
+	rightStyle := diffStyle.Copy()
+	leftStyle := sidebarStyle.Copy()
+	if !preview {
+		if m.diffFocus {
+			rightStyle = rightStyle.BorderForeground(lipgloss.Color("#58a6ff"))
+		} else {
+			leftStyle = leftStyle.BorderForeground(lipgloss.Color("#58a6ff"))
+		}
 	}
 
-	_, sideH := sidebarStyle.GetFrameSize()
-	innerSideHeight := m.height - sideH
-	if innerSideHeight < 5 {
-		innerSideHeight = 5
+	right := panelStyle(rightStyle, diffWidth, innerHeight).Render(diffContent)
+	left := panelStyle(leftStyle, fileWidth, innerHeight).Render(clipLines(m.fileList.View(), fileWidth))
+	return lipgloss.JoinHorizontal(lipgloss.Top, left, right)
+}
+
+func (m model) View() string {
+	if m.width <= 0 || m.height <= 0 {
+		return ""
 	}
-
-	right := rStyle.Width(diffWidth).Height(innerSideHeight).Render(diffContent)
-	left := lStyle.Width(fileListWidth).Height(innerSideHeight).Render(m.fileList.View())
-
-	return docStyle.Render(lipgloss.JoinHorizontal(lipgloss.Top, left, right))
+	if m.state == 0 {
+		if m.width < minimumSplitWidth || m.height < minimumDetailHeight {
+			content := clipRows(clipLines(m.commitList.View(), m.width), m.height)
+			return docStyle.Render(lipgloss.NewStyle().Width(m.width).Height(m.height).Render(content))
+		}
+		commitWidth := m.width / 2
+		commitPane := lipgloss.NewStyle().Width(commitWidth).Height(m.height).Render(m.commitList.View())
+		previewPane := m.renderDetails(m.width-commitWidth, true)
+		return docStyle.Render(lipgloss.JoinHorizontal(lipgloss.Top, commitPane, previewPane))
+	}
+	if m.height < minimumDetailHeight {
+		return docStyle.Render(ansi.Truncate("Widen terminal to view commit", m.width, ""))
+	}
+	return docStyle.Render(m.renderDetails(m.width, false))
 }
 
 func main() {

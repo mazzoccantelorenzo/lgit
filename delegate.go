@@ -47,7 +47,12 @@ func (d customDelegate) Render(w io.Writer, m list.Model, index int, listItem li
 	commitID := lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Render(i.commit.ID)
 	commitMsg := lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Render(i.commit.Message)
 
-	title := fmt.Sprintf("%s  %s", commitID, commitMsg)
+	title := commitID
+	if i.commit.Decorations != "" {
+		decorations := lipgloss.NewStyle().Foreground(lipgloss.Color("6")).Render("(" + i.commit.Decorations + ")")
+		title += " " + decorations
+	}
+	title += "  " + commitMsg
 	desc := fmt.Sprintf("%s • %s", i.commit.Author, i.commit.Date)
 
 	bodyLines := []string{}
