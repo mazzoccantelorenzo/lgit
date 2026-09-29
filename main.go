@@ -252,9 +252,6 @@ func selectedFilePath(fileList list.Model) string {
 
 // updateSelectedFileDiff is the detail refresh when the file selection changes.
 func (m *model) updateSelectedFileDiff(previousPath string) {
-	if m.state == 0 {
-		return
-	}
 	item, ok := m.fileList.SelectedItem().(fileItem)
 	if !ok {
 		m.diffView.SetContent("No file selected.")
@@ -265,10 +262,10 @@ func (m *model) updateSelectedFileDiff(previousPath string) {
 	}
 	var diff string
 	var err error
-	if m.state == 1 {
-		diff, err = core.FetchFileDiff(m.selectedCommit.ID, item.file.Path)
-	} else {
+	if m.state == 2 {
 		diff, err = core.FetchBranchFileDiff(m.branches[m.branchIndex], item.file.Path)
+	} else {
+		diff, err = core.FetchFileDiff(m.selectedCommit.ID, item.file.Path)
 	}
 	if err != nil {
 		m.diffView.SetContent("Could not load file diff: " + err.Error())
@@ -276,6 +273,23 @@ func (m *model) updateSelectedFileDiff(previousPath string) {
 		m.diffView.SetContent(colorizeDiff(diff))
 	}
 	m.diffView.GotoTop()
+}
+
+// selectPreviewFile is the file navigation used while the commit list keeps focus.
+func (m *model) selectPreviewFile(direction int) {
+	if len(m.fileList.Items()) == 0 {
+		return
+	}
+	previousPath := selectedFilePath(m.fileList)
+	nextIndex := m.fileList.Index() + direction
+	if nextIndex < 0 {
+		nextIndex = 0
+	}
+	if nextIndex >= len(m.fileList.Items()) {
+		nextIndex = len(m.fileList.Items()) - 1
+	}
+	m.fileList.Select(nextIndex)
+	m.updateSelectedFileDiff(previousPath)
 }
 
 func (m model) Init() tea.Cmd {
@@ -368,7 +382,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if m.state == 0 {
 			if !isFiltering {
-				if msg.String() == "tab" {
+				if msg.String() == "ctrl+down" {
+					m.selectPreviewFile(1)
+					return m, nil
+				} else if msg.String() == "ctrl+up" {
+					m.selectPreviewFile(-1)
+					return m, nil
+				} else if msg.String() == "tab" {
 					m.branchIndex = (m.branchIndex + 1) % len(m.branches)
 					return m, m.updateCommits()
 				} else if msg.String() == "shift+tab" {
@@ -627,7 +647,7 @@ func (m model) renderCompactPreview(width int) string {
 		fileText = "Loading files..."
 	}
 	fileLine := lipgloss.NewStyle().Foreground(lipgloss.Color("#8b949e")).Render(ansi.Truncate(fileText, contentWidth, "…"))
-	footerText := " [→] Open "
+	footerText := " [⌘↑/⌘↓] Files  [→] Open "
 	if m.state != 0 {
 		footerText = " [↑/↓] Files  [←] Back "
 	}
@@ -655,7 +675,7 @@ func (m model) renderDetails(width int, preview bool) string {
 	}
 	header := headerStyle.Render(ansi.Truncate(headerText, diffWidth, "…"))
 
-	footerText := " [→] Open "
+	footerText := " [⌘↑/⌘↓] Files  [→] Open "
 	if !preview {
 		footerText = " [←] Sidebar  [→] Scroll Diff "
 		if m.diffFocus {

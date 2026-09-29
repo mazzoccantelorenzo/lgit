@@ -35,7 +35,14 @@ func TestCommitPreviewFollowsSelection(t *testing.T) {
 
 	runGit("init", "-q", "-b", "main")
 	writeAndCommit("candidate.txt", "Candidate profile\n", "add candidate")
-	writeAndCommit("interview.txt", "Interview booked "+strings.Repeat("after candidate screening ", 8)+"\n", "record interview")
+	if err := os.WriteFile("interview.txt", []byte("Interview booked "+strings.Repeat("after candidate screening ", 8)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile("screening.txt", []byte("Screening complete\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit("add", "interview.txt", "screening.txt")
+	runGit("-c", "user.name=Test Author", "-c", "user.email=test@example.com", "commit", "-q", "-m", "record interview")
 
 	current := initialModel()
 	updated, _ := current.Update(tea.WindowSizeMsg{Width: 160, Height: 40})
@@ -55,6 +62,19 @@ func TestCommitPreviewFollowsSelection(t *testing.T) {
 	}
 	if got := lipgloss.Height(screen); got > 40 {
 		t.Errorf("split view is %d rows high, terminal is 40", got)
+	}
+	updated, _ = current.Update(tea.KeyMsg{Type: tea.KeyCtrlDown})
+	current = updated.(model)
+	if selectedFilePath(current.fileList) != "screening.txt" || !strings.Contains(current.View(), "Screening complete") {
+		t.Fatal("Cmd+Down did not move the preview to the next file")
+	}
+	if current.selectedCommit.Message != "record interview" || !strings.Contains(current.View(), "⌘↑/⌘↓") {
+		t.Fatal("file navigation changed the commit or lost its shortcut hint")
+	}
+	updated, _ = current.Update(tea.KeyMsg{Type: tea.KeyCtrlUp})
+	current = updated.(model)
+	if selectedFilePath(current.fileList) != "interview.txt" || !strings.Contains(current.View(), "Interview booked") {
+		t.Fatal("Cmd+Up did not move the preview to the previous file")
 	}
 	for _, size := range []tea.WindowSizeMsg{{Width: 40, Height: 40}, {Width: 80, Height: 8}} {
 		updated, _ = current.Update(size)
