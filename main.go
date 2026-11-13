@@ -78,6 +78,7 @@ type model struct {
 	clipboardWriter func(string) error
 
 	showSplash bool
+	showHelp   bool
 }
 
 type splashDoneMsg struct{}
@@ -348,6 +349,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case splashDoneMsg:
 		m.showSplash = false
+		m.showHelp = true
 		m.applyLayout()
 		return m, nil
 	case editorFinishedMsg:
@@ -438,7 +440,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.showSplash {
 			m.showSplash = false
+			m.showHelp = true
 			m.applyLayout()
+			return m, nil
+		}
+		if m.showHelp {
+			m.showHelp = false
 			return m, nil
 		}
 		if !isFiltering && msg.String() == "q" {
@@ -481,7 +488,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						}
 					}
 				} else if msg.String() == "h" || msg.String() == "?" {
-					m.showSplash = true
+					m.showHelp = !m.showHelp
 					return m, nil
 				} else if msg.String() == "enter" || msg.String() == "right" || msg.String() == "l" {
 					if _, ok := m.commitList.SelectedItem().(commitItem); ok {
@@ -552,7 +559,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, routeListCommand(cmd, fileListTarget)
 			}
 			if msg.String() == "?" {
-				m.showSplash = true
+				m.showHelp = !m.showHelp
 				return m, nil
 			}
 			if msg.String() == "enter" {
@@ -852,22 +859,31 @@ func (m model) View() string {
 		return ""
 	}
 	if m.showSplash {
-		return splashView(m.width, m.height)
+		return splashLoadingView(m.width, m.height)
 	}
+
+	var baseView string
 	if m.state == 0 {
 		if m.width < minimumSplitWidth || m.height < minimumDetailHeight {
 			content := clipRows(clipLines(m.commitList.View(), m.width), m.height)
-			return docStyle.Render(lipgloss.NewStyle().Width(m.width).Height(m.height).Render(content))
+			baseView = docStyle.Render(lipgloss.NewStyle().Width(m.width).Height(m.height).Render(content))
+		} else {
+			commitWidth := m.width / 2
+			commitPane := lipgloss.NewStyle().Width(commitWidth).Height(m.height).Render(m.commitList.View())
+			previewPane := m.renderDetails(m.width-commitWidth, true)
+			baseView = docStyle.Render(lipgloss.JoinHorizontal(lipgloss.Top, commitPane, previewPane))
 		}
-		commitWidth := m.width / 2
-		commitPane := lipgloss.NewStyle().Width(commitWidth).Height(m.height).Render(m.commitList.View())
-		previewPane := m.renderDetails(m.width-commitWidth, true)
-		return docStyle.Render(lipgloss.JoinHorizontal(lipgloss.Top, commitPane, previewPane))
+	} else if m.height < minimumDetailHeight {
+		baseView = docStyle.Render(ansi.Truncate("Widen terminal to view commit", m.width, ""))
+	} else {
+		baseView = docStyle.Render(m.renderDetails(m.width, false))
 	}
-	if m.height < minimumDetailHeight {
-		return docStyle.Render(ansi.Truncate("Widen terminal to view commit", m.width, ""))
+
+	if m.showHelp {
+		modal := helpModalView(m.width, m.height)
+		return overlayModal(baseView, modal, m.width, m.height)
 	}
-	return docStyle.Render(m.renderDetails(m.width, false))
+	return baseView
 }
 
 func main() {
