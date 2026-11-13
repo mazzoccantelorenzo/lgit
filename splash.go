@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // splashLoadingView renders the brief 3D ASCII loading animation (0.5s) upon opening lgit.
@@ -52,12 +53,8 @@ func splashLoadingView(width, height int) string {
 	)
 }
 
-// helpModalView renders the keyboard shortcuts guide as a centered modal dialog with a dim border.
-func helpModalView(width, height int) string {
-	if width <= 0 || height <= 0 {
-		return ""
-	}
-
+// helpModalBox renders the standalone modal box string.
+func helpModalBox() string {
 	headerStyle := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.Color("#58a6ff"))
@@ -102,33 +99,40 @@ func helpModalView(width, height int) string {
 
 	boxContent := lipgloss.JoinVertical(lipgloss.Left, guideRows...)
 
-	modalBox := lipgloss.NewStyle().
+	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("#58a6ff")).
 		Background(lipgloss.Color("#0d1117")).
 		Padding(1, 3).
 		Render(boxContent)
+}
 
+// helpModalView renders the modal centered in available space.
+func helpModalView(width, height int) string {
+	if width <= 0 || height <= 0 {
+		return ""
+	}
 	return lipgloss.Place(
 		width,
 		height,
 		lipgloss.Center,
 		lipgloss.Center,
-		modalBox,
+		helpModalBox(),
 	)
 }
 
-// overlayModal renders the modal content on top of background lines.
+// overlayModal renders the modal box strictly centered on top of the underlying background view.
 func overlayModal(background string, modal string, width, height int) string {
 	bgLines := strings.Split(background, "\n")
-	modalLines := strings.Split(modal, "\n")
+	modalBoxString := helpModalBox()
+	modalLines := strings.Split(modalBoxString, "\n")
 
 	modalH := len(modalLines)
-	if modalH == 0 {
+	if modalH == 0 || height <= 0 || width <= 0 {
 		return background
 	}
 
-	modalW := lipgloss.Width(modalLines[0])
+	modalW := ansi.StringWidth(modalLines[0])
 	startY := (height - modalH) / 2
 	startX := (width - modalW) / 2
 
@@ -150,26 +154,18 @@ func overlayModal(background string, modal string, width, height int) string {
 		}
 
 		origLine := bgLines[targetY]
-		origRunes := []rune(origLine)
+		origWidth := ansi.StringWidth(origLine)
 
-		if len(origRunes) < width {
-			origRunes = append(origRunes, []rune(strings.Repeat(" ", width-len(origRunes)))...)
+		leftPart := ansi.Truncate(origLine, startX, "")
+		leftWidth := ansi.StringWidth(leftPart)
+		if leftWidth < startX {
+			leftPart += strings.Repeat(" ", startX-leftWidth)
 		}
 
-		mLen := lipgloss.Width(mLine)
-		endX := startX + mLen
-		if endX > len(origRunes) {
-			endX = len(origRunes)
-		}
-
-		// Composite line
-		var leftPart string
-		if startX > 0 && startX <= len(origRunes) {
-			leftPart = string(origRunes[:startX])
-		}
+		rightOffset := startX + modalW
 		var rightPart string
-		if endX < len(origRunes) {
-			rightPart = string(origRunes[endX:])
+		if rightOffset < origWidth {
+			rightPart = ansi.Cut(origLine, rightOffset, origWidth)
 		}
 
 		bgLines[targetY] = leftPart + mLine + rightPart

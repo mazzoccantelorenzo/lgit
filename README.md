@@ -1,5 +1,14 @@
 # lgit
 
+```
+    __           _  __ 
+   / /____ _    (_)/ /_
+  / // __ '/   / // __/
+ / // /_/ /   / // /_  
+/_/ \__, /   /_/ \__/  
+   /____/              
+```
+
 <p align="center">
   <strong style="font-size: 1.25rem;">Blazing fast, keyboard-first Terminal UI for Git history, diff exploration, and Neovim workflows.</strong>
 </p>
@@ -29,20 +38,21 @@
 
 ---
 
-## ✨ Features
+## Features
 
-- ⚡ **Zero Lag & Instant Startup**: Native Go binary with minimal footprint and instant rendering across large repositories.
-- 🔀 **Branch Switching on the Fly**: Cycle through local branches with `Tab` / `Shift+Tab` without leaving the interface.
-- 🔎 **Real-Time Fuzzy Filtering**: Search through commits, authors, hashes, or modified files with instant fuzzy search (`/`).
-- 📝 **Native Neovim Integration**: Press `Enter` on any modified file to jump straight into Neovim. When you quit Neovim, your position, diff scroll, and filters are preserved.
-- 🚨 **Uncommitted Local Changes Guard**: Displays an unmistakable warning when a file in history has uncommitted (or staged) modifications in your working tree.
-- 🌿 **Pull Request Cumulative Diff (`p` / `b`)**: Compare your active feature branch against its auto-detected base branch (`main` / `master` / tracking upstream) in a single unified view.
-- ✍️ **Git History Reword (`e` / `f`)**: Quickly trigger `git history reword` directly from the commit list, with optional automated 72-char auto-wrap formatting.
-- 🔄 **Non-Blocking Background Updates**: Checks GitHub in the background at startup and gently notifies you if your local binary is behind the remote default branch.
+- **Zero Lag & Instant Startup**: Native Go binary with minimal footprint and instant rendering across large repositories.
+- **Branch Switching on the Fly**: Cycle through local branches with `Tab` / `Shift+Tab` without leaving the interface.
+- **Real-Time Fuzzy Filtering**: Search through commits, authors, hashes, or modified files with instant fuzzy search (`/`).
+- **Native Neovim Integration**: Press `Enter` on any modified file to jump straight into Neovim. When you quit Neovim, your position, diff scroll, and filters are preserved.
+- **Uncommitted Local Changes Guard**: Displays an unmistakable warning when a file in history has uncommitted (or staged) modifications in your working tree.
+- **Pull Request Cumulative Diff (`p` / `b`)**: Compare your active feature branch against its auto-detected base branch (`main` / `master` / tracking upstream) in a single unified view.
+- **Git History Reword (`e` / `f`)**: Quickly trigger `git history reword` directly from the commit list, with optional automated 72-char auto-wrap formatting.
+- **Keybinding Modal & Help (`h` / `?`)**: Centered shortcut guide accessible anywhere with a single keystroke.
+- **Non-Blocking Background Updates**: Checks GitHub in the background at startup and notifies you if your local binary is behind the remote default branch.
 
 ---
 
-## 📦 Installation
+## Installation
 
 ### Prerequisites
 - **Git** (2.20+)
@@ -69,7 +79,7 @@ export PATH="$HOME/.local/bin:$PATH"
 
 ---
 
-## 🚀 Usage
+## Usage
 
 Run `lgit` inside any Git repository:
 
@@ -79,7 +89,7 @@ lgit
 
 ---
 
-## ⌨️ Keybindings
+## Keybindings
 
 ### 1. Commit History View (Main Mode)
 
@@ -94,6 +104,7 @@ lgit
 | `e` | Interactive Git commit reword (`git history reword <sha>`) |
 | `f` | Auto-format & reword commit message (72-char hard wrap in Neovim) |
 | `/` | Filter commits by hash, message, or author |
+| `h` / `?` | Open / close Keyboard Shortcuts modal |
 | `q` / `Ctrl+C` | Quit `lgit` |
 
 ### 2. File & Diff View (Detail / PR Mode)
@@ -107,10 +118,11 @@ lgit
 | `Esc` / `h` (at file level) | Back to commit list |
 | `p` / `b` | Exit PR view back to commit list |
 | `/` | Filter modified files by filename / path |
+| `?` | Open / close Keyboard Shortcuts modal |
 
 ---
 
-## ⚡ Terminal Configurations
+## Terminal Configurations
 
 ### Ghostty
 To navigate diff previews with `Shift+↑` and `Shift+↓` without terminal text selection conflicts, add the following to `~/.config/ghostty/config`:
@@ -124,7 +136,7 @@ Reload Ghostty with `⌘ + ⇧ + ,`.
 
 ---
 
-## 🔄 Updating
+## Updating
 
 `lgit` automatically checks if a newer version exists on GitHub at startup. To update your local install:
 
@@ -136,7 +148,7 @@ go build -o "$HOME/.local/bin/lgit" .
 
 ---
 
-## 🛠️ Contributing & Development
+## Contributing & Development
 
 Contributions, bug reports, and PRs are welcome!
 
@@ -150,6 +162,6 @@ go test -race ./...
 
 ---
 
-## 📄 License
+## License
 
 Distributed under the **MIT License**. See `LICENSE` for more information.
