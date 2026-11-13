@@ -6,21 +6,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// splashLogo is the 3D isometric block ASCII art with a retro-terminal face.
-const (
-	splashASCII = `
-   ___           _   _   
-  / (_)         | | | |  
-  | |    __ _   | |_| |_ 
-  | |   / _' |  |  _  __|
-  | |_ | (_| |  | | | |_ 
-  \__(_)__,  |  \_| \___|
-        |___/            `
-
-	splashFace = `( ˘ ³˘)♥  or  ( •̀ ω •́ )✧`
-)
-
-// splashView renders a centered 3D ASCII logo with glowing gradients and a retro Kaomoji face.
+// splashView renders a clean, professional 3D ASCII logo with an interactive keybinding guide.
+// It contains zero emojis and can be reopened anytime by pressing 'h' or '?' from the commit log.
 func splashView(width, height int) string {
 	if width <= 0 || height <= 0 {
 		return ""
@@ -31,15 +18,21 @@ func splashView(width, height int) string {
 		Foreground(lipgloss.Color("#58a6ff"))
 
 	taglineStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#8b949e")).
-		Italic(true)
+		Foreground(lipgloss.Color("#8b949e"))
 
-	faceStyle := lipgloss.NewStyle().
+	titleStyle := lipgloss.NewStyle().
 		Bold(true).
-		Foreground(lipgloss.Color("#3fb950"))
+		Foreground(lipgloss.Color("#c9d1d9"))
 
-	dotsStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#d29922"))
+	keyStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("#79c0ff"))
+
+	descStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#8b949e"))
+
+	hintStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#6e7681"))
 
 	art3d := `
     __           _  __ 
@@ -49,16 +42,38 @@ func splashView(width, height int) string {
 /_/ \__, /   /_/ \__/  
    /____/              `
 
-	face := "( •̀ ω •́ )✧  loading repo..."
+	formatRow := func(key, desc string) string {
+		k := keyStyle.Width(16).Render(key)
+		d := descStyle.Render(desc)
+		return lipgloss.JoinHorizontal(lipgloss.Top, k, d)
+	}
 
-	boxContent := lipgloss.JoinVertical(
+	guideRows := []string{
+		titleStyle.Render("KEYBOARD SHORTCUTS"),
+		"",
+		formatRow("Enter / l / ->", "Open commit files & diff preview"),
+		formatRow("Tab / Shift+Tab", "Switch git branches"),
+		formatRow("p / b", "Cumulative PR diff vs base branch"),
+		formatRow("Space", "Toggle full commit message details"),
+		formatRow("Shift+Up / Down", "Scroll file preview from commit list"),
+		formatRow("Enter (in files)", "Open selected file directly in Neovim"),
+		formatRow("e", "Interactive git history reword"),
+		formatRow("f", "Reword commit with 72-char auto-wrap"),
+		formatRow("/", "Fuzzy search commits or files"),
+		formatRow("h / ?", "Show this keybindings guide"),
+		formatRow("q / Esc", "Close guide / Exit lgit"),
+	}
+
+	guideBox := lipgloss.JoinVertical(lipgloss.Left, guideRows...)
+
+	content := lipgloss.JoinVertical(
 		lipgloss.Center,
 		logoStyle.Render(strings.TrimPrefix(art3d, "\n")),
+		taglineStyle.Render("terminal ui for git history and diffs"),
 		"",
-		faceStyle.Render(face),
+		guideBox,
 		"",
-		taglineStyle.Render("blazing fast terminal git history"),
-		dotsStyle.Render("• • •"),
+		hintStyle.Render("press any key or Enter to continue..."),
 	)
 
 	boxStyle := lipgloss.NewStyle().
@@ -66,7 +81,7 @@ func splashView(width, height int) string {
 		BorderForeground(lipgloss.Color("#30363d")).
 		Padding(1, 4)
 
-	renderedBox := boxStyle.Render(boxContent)
+	renderedBox := boxStyle.Render(content)
 
 	return lipgloss.Place(
 		width,

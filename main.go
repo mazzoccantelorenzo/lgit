@@ -480,6 +480,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							return rebaseFinishedMsg{err}
 						}
 					}
+				} else if msg.String() == "h" || msg.String() == "?" {
+					m.showSplash = true
+					return m, nil
 				} else if msg.String() == "enter" || msg.String() == "right" || msg.String() == "l" {
 					if _, ok := m.commitList.SelectedItem().(commitItem); ok {
 						m.state = 1
@@ -547,6 +550,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.fileList, cmd = m.fileList.Update(msg)
 				m.updateSelectedFileDiff(previousFile)
 				return m, routeListCommand(cmd, fileListTarget)
+			}
+			if msg.String() == "?" {
+				m.showSplash = true
+				return m, nil
 			}
 			if msg.String() == "enter" {
 				if filePath := selectedFilePath(m.fileList); filePath != "" {

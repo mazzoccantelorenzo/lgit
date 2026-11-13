@@ -20,8 +20,8 @@ func TestSplashLogoScreen(t *testing.T) {
 	m = updated.(model)
 
 	view := m.View()
-	if !strings.Contains(view, "( •̀ ω •́ )✧") {
-		t.Fatalf("splash screen does not contain the kaomoji face: %s", view)
+	if !strings.Contains(view, "KEYBOARD SHORTCUTS") {
+		t.Fatalf("splash screen does not contain KEYBOARD SHORTCUTS: %s", view)
 	}
 
 	// After splashDoneMsg, splash should be dismissed
@@ -39,6 +39,13 @@ func TestSplashLogoScreen(t *testing.T) {
 	m2 = updated2.(model)
 	if m2.showSplash {
 		t.Fatal("expected key press to dismiss splash screen immediately")
+	}
+
+	// Pressing 'h' in commit list reopens the guide screen
+	updated2, _ = m2.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	m2 = updated2.(model)
+	if !m2.showSplash {
+		t.Fatal("expected 'h' to reopen the keybinding guide screen")
 	}
 }
 
