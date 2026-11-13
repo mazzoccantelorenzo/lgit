@@ -174,3 +174,68 @@ func TestCommitPreviewFollowsSelection(t *testing.T) {
 		t.Fatal("available update warning is missing from the commit list")
 	}
 }
+
+// TestPullRequestBranchDiffView verifies the cumulative pull request diff view triggered by the p key.
+func TestPullRequestBranchDiffView(t *testing.T) {
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Chdir(t.TempDir())
+
+	runGit := func(args ...string) {
+		t.Helper()
+		command := exec.Command("git", args...)
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
+		}
+	}
+	writeAndCommit := func(path, contents, subject string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		runGit("add", path)
+		runGit("-c", "user.name=Test Author", "-c", "user.email=test@example.com", "commit", "-q", "-m", subject)
+	}
+
+	runGit("init", "-q", "-b", "main")
+	writeAndCommit("base.txt", "Base contents\n", "initial base commit")
+
+	runGit("checkout", "-q", "-b", "feature/pr-review")
+	writeAndCommit("feature1.txt", "First feature code\n", "commit one")
+	writeAndCommit("feature2.txt", "Second feature code\n", "commit two")
+
+	current := initialModel()
+	updated, _ := current.Update(tea.WindowSizeMsg{Width: 160, Height: 40})
+	current = updated.(model)
+
+	if current.state != 0 {
+		t.Fatalf("expected initial state to be 0, got %d", current.state)
+	}
+
+	// Press 'p' to open the PR Diff view
+	updated, _ = current.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	current = updated.(model)
+
+	if current.state != 2 {
+		t.Fatalf("expected state 2 after pressing 'p', got %d", current.state)
+	}
+
+	if len(current.fileList.Items()) != 2 {
+		t.Fatalf("expected 2 files in branch PR diff, got %d", len(current.fileList.Items()))
+	}
+
+	screen := current.View()
+	for _, expectedText := range []string{"PR Diff:", "feature1.txt", "feature2.txt", "+First feature code"} {
+		if !strings.Contains(screen, expectedText) {
+			t.Errorf("PR diff screen is missing %q", expectedText)
+		}
+	}
+
+	// Press 'p' again to toggle back to commit list
+	updated, _ = current.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	current = updated.(model)
+
+	if current.state != 0 {
+		t.Fatalf("expected state 0 after toggling 'p', got %d", current.state)
+	}
+}

@@ -64,12 +64,23 @@ type model struct {
 	previewRequest  uint64
 	previewLoading  bool
 	updateAvailable bool
+	editorError     string
+	localChanges    map[string]bool
 
-	branches    []string
-	branchIndex int
-	expanded    bool
-	diffFocus   bool
+	branches        []string
+	branchIndex     int
+	baseBranch      string
+	expanded        bool
+	diffFocus       bool
+	rawDiff         string
+	diffColorized   bool
+	selection       diffSelection
+	clipboardWriter func(string) error
+
+	showSplash bool
 }
+
+type splashDoneMsg struct{}
 
 type rebaseFinishedMsg struct{ err error }
 type tickMsg time.Time
@@ -134,14 +145,14 @@ func tickCmd() tea.Cmd {
 
 // commitListTitle is the list heading that keeps update warnings visible across refreshes.
 func commitListTitle(branch string, updateAvailable bool) string {
-	title := fmt.Sprintf("Git Log TUI  [ Tab: branch | Space: expand ]  Branch: %s", branch)
+	title := fmt.Sprintf("Git Log TUI  [ Tab: branch | p: PR diff | Space: expand ]  Branch: %s", branch)
 	if updateAvailable {
 		return "⚠ lgit update available  |  " + title
 	}
 	return title
 }
 
-func initialModel() model {
+func newModel(showSplash bool) model {
 	branches, _ := core.FetchBranches()
 	if len(branches) == 0 {
 		branches = []string{"master"}
@@ -180,9 +191,15 @@ func initialModel() model {
 		state:       0,
 		branches:    branches,
 		branchIndex: branchIndex,
+		showSplash:  showSplash,
 	}
+	result.refreshLocalChanges()
 	result.selectCommitPreview()
 	return result
+}
+
+func initialModel() model {
+	return newModel(false)
 }
 
 // selectCommitPreview is the selection handler that keeps the right pane on the highlighted commit.
@@ -193,8 +210,9 @@ func (m *model) selectCommitPreview() tea.Cmd {
 		m.selectedCommit = core.Commit{}
 		m.fileList.ResetFilter()
 		m.fileList.SetItems(nil)
-		m.diffView.SetContent("No commit selected.")
+		m.setDiffContent("No commit selected.", false)
 		m.previewLoading = false
+		m.applyLayout()
 		return nil
 	}
 	if item.commit.ID == m.selectedCommit.ID {
@@ -206,10 +224,11 @@ func (m *model) selectCommitPreview() tea.Cmd {
 	m.fileList.ResetFilter()
 	m.fileList.SetItems(nil)
 	m.fileList.Title = "Commit Files"
-	m.diffView.SetContent("Loading commit preview...")
+	m.setDiffContent("Loading commit preview...", false)
 	m.diffView.GotoTop()
 	m.previewRequest++
 	m.previewLoading = true
+	m.applyLayout()
 	return fetchCommitPreview(item.commit.ID, m.previewRequest)
 }
 
@@ -264,7 +283,8 @@ func selectedFilePath(fileList list.Model) string {
 func (m *model) updateSelectedFileDiff(previousPath string) {
 	item, ok := m.fileList.SelectedItem().(fileItem)
 	if !ok {
-		m.diffView.SetContent("No file selected.")
+		m.setDiffContent("No file selected.", false)
+		m.applyLayout()
 		return
 	}
 	if item.file.Path == previousPath {
@@ -273,16 +293,17 @@ func (m *model) updateSelectedFileDiff(previousPath string) {
 	var diff string
 	var err error
 	if m.state == 2 {
-		diff, err = core.FetchBranchFileDiff(m.branches[m.branchIndex], item.file.Path)
+		diff, err = core.FetchBranchFileDiff(m.baseBranch, m.branches[m.branchIndex], item.file.Path)
 	} else {
 		diff, err = core.FetchFileDiff(m.selectedCommit.ID, item.file.Path)
 	}
 	if err != nil {
-		m.diffView.SetContent("Could not load file diff: " + err.Error())
+		m.setDiffContent("Could not load file diff: "+err.Error(), false)
 	} else {
-		m.diffView.SetContent(colorizeDiff(diff))
+		m.setDiffContent(diff, true)
 	}
 	m.diffView.GotoTop()
+	m.applyLayout()
 }
 
 // selectPreviewFile is the file navigation used while the commit list keeps focus.
@@ -302,11 +323,22 @@ func (m *model) selectPreviewFile(direction int) {
 	m.updateSelectedFileDiff(previousPath)
 }
 
+func splashTimerCmd() tea.Cmd {
+	return tea.Tick(500*time.Millisecond, func(t time.Time) tea.Msg {
+		return splashDoneMsg{}
+	})
+}
+
 func (m model) Init() tea.Cmd {
-	if m.selectedCommit.ID == "" {
-		return tea.Batch(tickCmd(), checkForUpdates())
+	var initialCmds []tea.Cmd
+	if m.showSplash {
+		initialCmds = append(initialCmds, splashTimerCmd())
 	}
-	return tea.Batch(tickCmd(), checkForUpdates(), fetchCommitPreview(m.selectedCommit.ID, m.previewRequest))
+	initialCmds = append(initialCmds, tickCmd(), checkForUpdates())
+	if m.selectedCommit.ID != "" {
+		initialCmds = append(initialCmds, fetchCommitPreview(m.selectedCommit.ID, m.previewRequest))
+	}
+	return tea.Batch(initialCmds...)
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -314,6 +346,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
+	case splashDoneMsg:
+		m.showSplash = false
+		m.applyLayout()
+		return m, nil
+	case editorFinishedMsg:
+		if msg.err != nil {
+			m.editorError = "Could not open nvim: " + msg.err.Error()
+		}
+		m.refreshLocalChanges()
+		return m, nil
 	case rebaseFinishedMsg:
 		return m, m.updateCommits()
 	case updateAvailableMsg:
@@ -327,7 +369,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.previewLoading = false
 		if msg.err != nil {
 			m.fileList.SetItems(nil)
-			m.diffView.SetContent("Could not load commit preview: " + msg.err.Error())
+			m.setDiffContent("Could not load commit preview: "+msg.err.Error(), false)
+			m.applyLayout()
 			return m, nil
 		}
 		var items []list.Item
@@ -336,8 +379,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		filterCommand := m.fileList.SetItems(items)
 		m.fileList.Select(0)
-		m.diffView.SetContent(colorizeDiff(msg.diff))
+		m.setDiffContent(msg.diff, len(msg.files) > 0)
 		m.diffView.GotoTop()
+		m.applyLayout()
 		return m, routeListCommand(filterCommand, fileListTarget)
 	case routedFilterMsg:
 		if msg.target == commitListTarget {
@@ -359,6 +403,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m.Update(routedFilterMsg{target: target, matches: msg})
 	case tickMsg:
+		m.refreshLocalChanges()
 		// Re-fetch branches and commits in background to check for updates
 		branches, _ := core.FetchBranches()
 		if len(branches) > 0 {
@@ -382,6 +427,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(append(cmds, tickCmd())...)
 
 	case tea.KeyMsg:
+		m.editorError = ""
 		isFiltering := m.commitList.FilterState() == list.Filtering
 		if m.state != 0 {
 			isFiltering = m.fileList.FilterState() == list.Filtering
@@ -389,6 +435,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if msg.String() == "ctrl+c" {
 			return m, tea.Quit
+		}
+		if m.showSplash {
+			m.showSplash = false
+			m.applyLayout()
+			return m, nil
 		}
 		if !isFiltering && msg.String() == "q" {
 			return m, tea.Quit
@@ -435,24 +486,50 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.applyLayout()
 						return m, nil
 					}
-				} else if msg.String() == "b" {
+				} else if msg.String() == "p" || msg.String() == "b" {
 					m.previewRequest++
-					branch := m.branches[m.branchIndex]
-					files, _ := core.FetchBranchFiles(branch)
+					currentBranch := m.branches[m.branchIndex]
+					baseBranch, detectionError := core.DetectBaseBranch(currentBranch)
+					if detectionError != nil || baseBranch == "" || baseBranch == currentBranch {
+						m.baseBranch = baseBranch
+						m.fileList.ResetFilter()
+						m.fileList.SetItems(nil)
+						m.fileList.Title = fmt.Sprintf("PR Files (%s)", currentBranch)
+						if baseBranch == currentBranch || currentBranch == "main" || currentBranch == "master" {
+							m.setDiffContent(fmt.Sprintf("Current branch '%s' is already the default or base branch.\n\nUse Tab to switch to a feature branch to inspect its cumulative PR diff.", currentBranch), false)
+						} else {
+							m.setDiffContent(fmt.Sprintf("Could not detect base branch for '%s'.\n\nEnsure a remote tracking branch or standard base branch (main/master) exists.", currentBranch), false)
+						}
+						m.state = 2
+						m.applyLayout()
+						return m, nil
+					}
 
-					var fItems []list.Item
-					for _, f := range files {
-						fItems = append(fItems, fileItem{file: f})
+					m.baseBranch = baseBranch
+					branchFiles, fetchError := core.FetchBranchFiles(baseBranch, currentBranch)
+					if fetchError != nil {
+						m.fileList.ResetFilter()
+						m.fileList.SetItems(nil)
+						m.setDiffContent(fmt.Sprintf("Error retrieving branch diff: %v", fetchError), false)
+						m.state = 2
+						m.applyLayout()
+						return m, nil
+					}
+
+					var fileItems []list.Item
+					for _, file := range branchFiles {
+						fileItems = append(fileItems, fileItem{file: file})
 					}
 					m.fileList.ResetFilter()
-					m.fileList.SetItems(fItems)
-					m.fileList.Title = "Branch Files (" + branch + ")"
+					m.fileList.SetItems(fileItems)
+					m.fileList.Title = fmt.Sprintf("PR Files (%s...%s)", baseBranch, currentBranch)
 
-					if len(files) > 0 {
-						diff, _ := core.FetchBranchFileDiff(branch, files[0].Path)
-						m.diffView.SetContent(colorizeDiff(diff))
+					if len(branchFiles) > 0 {
+						initialDiff, _ := core.FetchBranchFileDiff(baseBranch, currentBranch, branchFiles[0].Path)
+						m.setDiffContent(initialDiff, true)
+						m.diffView.GotoTop()
 					} else {
-						m.diffView.SetContent("No diff available (branch is even with master).")
+						m.setDiffContent(fmt.Sprintf("No diff available.\n\nBranch '%s' has no changes compared to '%s'.", currentBranch, baseBranch), false)
 					}
 					m.state = 2
 					m.applyLayout()
@@ -470,6 +547,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.fileList, cmd = m.fileList.Update(msg)
 				m.updateSelectedFileDiff(previousFile)
 				return m, routeListCommand(cmd, fileListTarget)
+			}
+			if msg.String() == "enter" {
+				if filePath := selectedFilePath(m.fileList); filePath != "" {
+					return m, openFileInEditor(filePath)
+				}
+				return m, nil
+			}
+			if msg.String() == "p" || msg.String() == "b" {
+				if m.state == 2 {
+					m.state = 0
+					m.diffFocus = false
+					m.applyLayout()
+					m.selectedCommit = core.Commit{}
+					return m, m.selectCommitPreview()
+				}
 			}
 			if msg.String() == "esc" {
 				wasBranchDetails := m.state == 2
@@ -510,6 +602,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+	case tea.MouseMsg:
+		m.handleMouseEvent(msg)
+		return m, nil
+
 	case tea.WindowSizeMsg:
 		docW, docH := docStyle.GetFrameSize()
 		m.width = msg.Width - docW
@@ -521,25 +617,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func colorizeDiff(diff string) string {
-	lines := strings.Split(diff, "\n")
-	var out []string
-
-	addStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#7ee787"))
-	rmStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#ffa198"))
-	hStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#79c0ff"))
-
-	for _, l := range lines {
-		if strings.HasPrefix(l, "+") && !strings.HasPrefix(l, "+++") {
-			out = append(out, addStyle.Render(l))
-		} else if strings.HasPrefix(l, "-") && !strings.HasPrefix(l, "---") {
-			out = append(out, rmStyle.Render(l))
-		} else if strings.HasPrefix(l, "@@") {
-			out = append(out, hStyle.Render(l))
-		} else {
-			out = append(out, l)
-		}
-	}
-	return strings.Join(out, "\n")
+	return renderDiffWithSelection(diff, diffSelection{})
 }
 
 // clipLines is the terminal-safe renderer that keeps long diff lines inside their pane.
@@ -631,6 +709,9 @@ func (m *model) applyLayout() {
 	if m.diffView.Width < 1 {
 		m.diffView.Width = 1
 	}
+	if warning := m.renderLocalChangesWarning(m.diffView.Width, m.diffView.Height-1); warning != "" {
+		m.diffView.Height -= lipgloss.Height(warning)
+	}
 	if m.diffView.Height < 1 {
 		m.diffView.Height = 1
 	}
@@ -644,7 +725,11 @@ func (m model) renderCompactPreview(width int) string {
 
 	headerText := m.selectedCommit.Message
 	if m.state == 2 {
-		headerText = "Changes in branch: " + m.branches[m.branchIndex]
+		if m.baseBranch != "" {
+			headerText = fmt.Sprintf("PR Diff: %s ➔ %s (%d files)", m.baseBranch, m.branches[m.branchIndex], len(m.fileList.Items()))
+		} else {
+			headerText = "PR Diff: " + m.branches[m.branchIndex]
+		}
 	}
 	if headerText == "" {
 		headerText = "Commit preview"
@@ -661,12 +746,23 @@ func (m model) renderCompactPreview(width int) string {
 		fileText = "Loading files..."
 	}
 	fileLine := lipgloss.NewStyle().Foreground(lipgloss.Color("#8b949e")).Render(ansi.Truncate(fileText, contentWidth, "…"))
-	footerText := " [Shift↑/↓] Files  [→] Open "
+	footerText := " [p] PR Diff  [Shift↑/↓] Files  [→] Open "
 	if m.state != 0 {
-		footerText = " [↑/↓] Files  [←] Back "
+		footerText = " [Enter] nvim  [↑/↓] Files  [←] Back "
+		if m.state == 2 {
+			footerText = " [Enter] nvim  [p/Esc] Commits  [↑/↓] Files  [←] Back "
+		}
+	}
+	if m.editorError != "" {
+		footerText = m.editorError
 	}
 	footer := lipgloss.NewStyle().Foreground(lipgloss.Color("#8b949e")).Render(ansi.Truncate(footerText, contentWidth, ""))
-	content := lipgloss.JoinVertical(lipgloss.Left, header, fileLine, clipLines(m.diffView.View(), contentWidth), footer)
+	lines := []string{header, fileLine, clipLines(m.diffView.View(), contentWidth)}
+	if warning := m.renderLocalChangesWarning(contentWidth, innerHeight-5); warning != "" {
+		lines = append(lines, warning)
+	}
+	lines = append(lines, footer)
+	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
 	return panelStyle(diffStyle, contentWidth, innerHeight).Render(content)
 }
 
@@ -682,19 +778,29 @@ func (m model) renderDetails(width int, preview bool) string {
 
 	headerText := m.selectedCommit.Message
 	if m.state == 2 && !preview {
-		headerText = "Changes in branch: " + m.branches[m.branchIndex]
+		if m.baseBranch != "" {
+			headerText = fmt.Sprintf("PR Diff: %s ➔ %s (%d files)", m.baseBranch, m.branches[m.branchIndex], len(m.fileList.Items()))
+		} else {
+			headerText = "PR Diff: " + m.branches[m.branchIndex]
+		}
 	}
 	if headerText == "" {
 		headerText = "Commit preview"
 	}
 	header := headerStyle.Render(ansi.Truncate(headerText, diffWidth, "…"))
 
-	footerText := " [Shift↑/↓] Files  [→] Open "
+	footerText := " [p] PR Diff  [Shift↑/↓] Files  [→] Open "
 	if !preview {
-		footerText = " [←] Sidebar  [→] Scroll Diff "
-		if m.diffFocus {
-			footerText = " [↑/↓] Scroll  [←] Back to Sidebar "
+		footerText = " [Enter] nvim  [←] Sidebar  [→] Scroll Diff "
+		if m.state == 2 {
+			footerText = " [Enter] nvim  [p/Esc] Commits  [←] Sidebar  [→] Scroll Diff "
 		}
+		if m.diffFocus {
+			footerText = " [Enter] nvim  [↑/↓] Scroll  [←] Back to Sidebar "
+		}
+	}
+	if m.editorError != "" {
+		footerText = m.editorError
 	}
 	footerRight := fmt.Sprintf(" %3d%% ", int(m.diffView.ScrollPercent()*100))
 	if diffWidth < lipgloss.Width(footerRight) {
@@ -713,7 +819,12 @@ func (m model) renderDetails(width int, preview bool) string {
 		footerStyle.Render(footerRight),
 	)
 
-	diffContent := lipgloss.JoinVertical(lipgloss.Left, header, clipLines(m.diffView.View(), diffWidth), footer)
+	lines := []string{header, clipLines(m.diffView.View(), diffWidth)}
+	if warning := m.renderLocalChangesWarning(diffWidth, innerHeight-4); warning != "" {
+		lines = append(lines, warning)
+	}
+	lines = append(lines, footer)
+	diffContent := lipgloss.JoinVertical(lipgloss.Left, lines...)
 	rightStyle := diffStyle.Copy()
 	leftStyle := sidebarStyle.Copy()
 	if !preview {
@@ -733,6 +844,9 @@ func (m model) View() string {
 	if m.width <= 0 || m.height <= 0 {
 		return ""
 	}
+	if m.showSplash {
+		return splashView(m.width, m.height)
+	}
 	if m.state == 0 {
 		if m.width < minimumSplitWidth || m.height < minimumDetailHeight {
 			content := clipRows(clipLines(m.commitList.View(), m.width), m.height)
@@ -750,7 +864,7 @@ func (m model) View() string {
 }
 
 func main() {
-	p := tea.NewProgram(initialModel(), tea.WithAltScreen())
+	p := tea.NewProgram(newModel(true), tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {
 		fmt.Printf("Errore TUI: %v", err)
 		os.Exit(1)

@@ -23,6 +23,23 @@ type FileChange struct {
 	Path   string
 }
 
+// FetchLocalChanges is the status query that finds uncommitted files relative to the repository root.
+func FetchLocalChanges() (map[string]bool, error) {
+	command := exec.Command("git", "--no-optional-locks", "status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames", "--ignore-submodules=none")
+	output, err := command.Output()
+	if err != nil {
+		return nil, fmt.Errorf("fetch local changes: %w", err)
+	}
+
+	changes := make(map[string]bool)
+	for _, record := range bytes.Split(output, []byte{0}) {
+		if len(record) > 3 {
+			changes[string(record[3:])] = true
+		}
+	}
+	return changes, nil
+}
+
 // FetchCommits is the function that handles fetching recent commits from the repository.
 func FetchBranches() ([]string, error) {
 	cmd := exec.Command("git", "for-each-ref", "--format=%(refname:short)", "refs/heads/")
@@ -73,43 +90,102 @@ func FetchCommits(branch string) ([]Commit, error) {
 	return commits, nil
 }
 
-// FetchCommitFiles is the function that retrieves the list of files modified in a given commit.
-func FetchBranchFiles(branch string) ([]FileChange, error) {
-	// usually diffing against master or main
-	baseBranch := "master"
-	if branch == "main" || branch == "master" {
-		return []FileChange{}, nil
+// DetectBaseBranch is the function that identifies the base branch used as the comparison source for pull request diffs.
+func DetectBaseBranch(currentBranch string) (string, error) {
+	// First, we inspect if Git has an explicit default remote head defined for the origin remote repository.
+	symbolicReferenceCommand := exec.Command("git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
+	var symbolicReferenceOutput bytes.Buffer
+	symbolicReferenceCommand.Stdout = &symbolicReferenceOutput
+	if executionError := symbolicReferenceCommand.Run(); executionError == nil {
+		remoteHeadReference := strings.TrimSpace(symbolicReferenceOutput.String())
+		trimmedBranchName := strings.TrimPrefix(remoteHeadReference, "origin/")
+		if trimmedBranchName != "" && trimmedBranchName != currentBranch {
+			mergeBaseCommand := exec.Command("git", "merge-base", remoteHeadReference, currentBranch)
+			if mergeBaseError := mergeBaseCommand.Run(); mergeBaseError == nil {
+				return remoteHeadReference, nil
+			}
+		}
 	}
-	cmd := exec.Command("git", "diff", "--name-status", baseBranch+"..."+branch)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	err := cmd.Run()
-	if err != nil {
-		return nil, err
-	}
-	var files []FileChange
-	lines := strings.Split(out.String(), "\n")
-	for _, l := range lines {
-		if l == "" {
+
+	// When the symbolic reference is unavailable or identical to the active branch, we evaluate common standard base branch names in hierarchical order.
+	standardCandidateBranches := []string{"main", "master", "develop", "stage", "origin/main", "origin/master"}
+	for _, candidateBranch := range standardCandidateBranches {
+		if candidateBranch == currentBranch {
 			continue
 		}
-		parts := strings.SplitN(l, "\t", 2)
-		if len(parts) == 2 {
-			files = append(files, FileChange{Status: strings.TrimSpace(parts[0]), Path: strings.TrimSpace(parts[1])})
+		verificationCommand := exec.Command("git", "rev-parse", "--verify", "--quiet", candidateBranch)
+		if verificationError := verificationCommand.Run(); verificationError != nil {
+			continue
+		}
+		mergeBaseCommand := exec.Command("git", "merge-base", candidateBranch, currentBranch)
+		if mergeBaseError := mergeBaseCommand.Run(); mergeBaseError == nil {
+			return candidateBranch, nil
 		}
 	}
-	return files, nil
+
+	// As a broader fallback, we scan all remaining local branches discovered in the repository to locate any branch sharing an ancestor.
+	discoveredBranches, discoveryError := FetchBranches()
+	if discoveryError == nil {
+		for _, discoveredBranch := range discoveredBranches {
+			if discoveredBranch == currentBranch {
+				continue
+			}
+			mergeBaseCommand := exec.Command("git", "merge-base", discoveredBranch, currentBranch)
+			if mergeBaseError := mergeBaseCommand.Run(); mergeBaseError == nil {
+				return discoveredBranch, nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf("no suitable base branch found to compare against %s", currentBranch)
 }
 
-func FetchBranchFileDiff(branch, filePath string) (string, error) {
-	baseBranch := "master"
-	cmd := exec.Command("git", "diff", baseBranch+"..."+branch, "--", filePath)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	if err := cmd.Run(); err != nil {
+// FetchBranchFiles is the function that retrieves all modified files across the current branch compared to the base branch.
+func FetchBranchFiles(baseBranch, currentBranch string) ([]FileChange, error) {
+	if baseBranch == "" || currentBranch == "" || baseBranch == currentBranch {
+		return []FileChange{}, nil
+	}
+
+	// We invoke git diff using the triple-dot comparison notation to evaluate changes originating from the merge base.
+	diffCommand := exec.Command("git", "diff", "--no-renames", "--name-status", baseBranch+"..."+currentBranch)
+	var commandOutput bytes.Buffer
+	diffCommand.Stdout = &commandOutput
+	if executionError := diffCommand.Run(); executionError != nil {
+		return nil, executionError
+	}
+
+	var modifiedFiles []FileChange
+	outputLines := strings.Split(commandOutput.String(), "\n")
+	for _, rawLine := range outputLines {
+		trimmedLine := strings.TrimSpace(rawLine)
+		if trimmedLine == "" {
+			continue
+		}
+		lineColumns := strings.SplitN(trimmedLine, "\t", 2)
+		if len(lineColumns) == 2 {
+			modifiedFiles = append(modifiedFiles, FileChange{
+				Status: strings.TrimSpace(lineColumns[0]),
+				Path:   strings.TrimSpace(lineColumns[1]),
+			})
+		}
+	}
+	return modifiedFiles, nil
+}
+
+// FetchBranchFileDiff is the function that loads the cumulative unified diff of a specific file for the pull request view.
+func FetchBranchFileDiff(baseBranch, currentBranch, filePath string) (string, error) {
+	if baseBranch == "" || currentBranch == "" {
 		return "No diff available", nil
 	}
-	return out.String(), nil
+
+	// The diff command targets the exact file path relative to the common ancestor using triple-dot syntax.
+	diffCommand := exec.Command("git", "diff", baseBranch+"..."+currentBranch, "--", filePath)
+	var commandOutput bytes.Buffer
+	diffCommand.Stdout = &commandOutput
+	if executionError := diffCommand.Run(); executionError != nil {
+		return "No diff available", nil
+	}
+	return commandOutput.String(), nil
 }
 
 func FetchCommitFiles(commitID string) ([]FileChange, error) {
